@@ -1,8 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:cashier_app/widget/admin_navigation.dart';
 
 class LoginPage extends StatelessWidget {
   const LoginPage({super.key});
+
+  void login(BuildContext context) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const AdminNavigation()),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -83,7 +91,7 @@ class LoginPage extends StatelessWidget {
                             ),
                           ),
                           onPressed: () {
-                            // Handle login action
+                            login(context);
                           },
                           child: Padding(
                             padding: const EdgeInsets.only(
