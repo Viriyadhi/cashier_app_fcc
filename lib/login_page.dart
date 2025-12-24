@@ -1,15 +1,64 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:cashier_app/widget/admin_navigation.dart';
+import 'package:dio/dio.dart';
+import 'package:cookie_jar/cookie_jar.dart';
+import 'package:dio_cookie_manager/dio_cookie_manager.dart';
 
-class LoginPage extends StatelessWidget {
+class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
-  void login(BuildContext context) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const AdminNavigation()),
-    );
+  @override
+  State<LoginPage> createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  final _nameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isLoading = false;
+  String? _errorText;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _login(BuildContext context) async {
+    setState(() {
+      _isLoading = true;
+      _errorText = null;
+    });
+
+    try {
+      final result = await AuthService.instance.login(
+        name: _nameController.text.trim(),
+        password: _passwordController.text,
+      );
+
+      if (result == '1' || result == '0') {
+        if (!context.mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const AdminNavigation()),
+        );
+      } else {
+        setState(() {
+          _errorText = 'Invalid username or password.';
+        });
+      }
+    } catch (error) {
+      setState(() {
+        _errorText = 'Login failed. Please try again.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
   }
 
   @override
@@ -41,7 +90,8 @@ class LoginPage extends StatelessWidget {
                   ),
                   SizedBox(
                     width: 400,
-                    child: const TextField(
+                    child: TextField(
+                      controller: _nameController,
                       autofocus: true,
                       cursorColor: Color(0xFF778873),
                       decoration: InputDecoration(
@@ -60,7 +110,8 @@ class LoginPage extends StatelessWidget {
                   ),
                   SizedBox(
                     width: 400,
-                    child: const TextField(
+                    child: TextField(
+                      controller: _passwordController,
                       obscureText: true,
                       cursorColor: Color(0xFF778873),
                       decoration: InputDecoration(
@@ -77,6 +128,14 @@ class LoginPage extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (_errorText != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Text(
+                        _errorText!,
+                        style: TextStyle(color: Colors.red.shade700),
+                      ),
+                    ),
                   SizedBox(
                     width: 400,
                     child: Align(
@@ -90,9 +149,7 @@ class LoginPage extends StatelessWidget {
                               borderRadius: BorderRadius.circular(10.0),
                             ),
                           ),
-                          onPressed: () {
-                            login(context);
-                          },
+                          onPressed: _isLoading ? null : () => _login(context),
                           child: Padding(
                             padding: const EdgeInsets.only(
                               top: 8.0,
@@ -100,13 +157,25 @@ class LoginPage extends StatelessWidget {
                               left: 12.0,
                               right: 12.0,
                             ),
-                            child: const Text(
-                              'Login',
-                              style: TextStyle(
-                                fontSize: 18,
-                                color: Colors.white,
-                              ),
-                            ),
+                            child:
+                                _isLoading
+                                    ? const SizedBox(
+                                      height: 18,
+                                      width: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor: AlwaysStoppedAnimation(
+                                          Colors.white,
+                                        ),
+                                      ),
+                                    )
+                                    : const Text(
+                                      'Login',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        color: Colors.white,
+                                      ),
+                                    ),
                           ),
                         ),
                       ),
@@ -119,5 +188,36 @@ class LoginPage extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class ApiClient {
+  ApiClient._();
+
+  static final ApiClient instance = ApiClient._();
+  static const String baseUrl = 'http://10.0.2.2:3000';
+
+  final _cookieJar = CookieJar();
+  late final Dio dio = Dio(
+    BaseOptions(
+      baseUrl: baseUrl,
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    ),
+  )..interceptors.add(CookieManager(_cookieJar));
+}
+
+class AuthService {
+  AuthService._();
+
+  static final AuthService instance = AuthService._();
+  final Dio _dio = ApiClient.instance.dio;
+
+  Future<String> login({required String name, required String password}) async {
+    final response = await _dio.post(
+      '/db/login_page/log_in',
+      data: {'name': name, 'password': password},
+      options: Options(contentType: Headers.formUrlEncodedContentType),
+    );
+    return response.data.toString();
   }
 }
