@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:cashier_app/widget/admin_navigation.dart';
-import 'package:dio/dio.dart';
-import 'package:cookie_jar/cookie_jar.dart';
-import 'package:dio_cookie_manager/dio_cookie_manager.dart';
+import 'package:cashier_app/api/auth_service.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -157,25 +155,23 @@ class _LoginPageState extends State<LoginPage> {
                               left: 12.0,
                               right: 12.0,
                             ),
-                            child:
-                                _isLoading
-                                    ? const SizedBox(
-                                      height: 18,
-                                      width: 18,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        valueColor: AlwaysStoppedAnimation(
-                                          Colors.white,
-                                        ),
-                                      ),
-                                    )
-                                    : const Text(
-                                      'Login',
-                                      style: TextStyle(
-                                        fontSize: 18,
-                                        color: Colors.white,
-                                      ),
+                            child: _isLoading
+                                ? const SizedBox(
+                                    height: 18,
+                                    width: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor:
+                                          AlwaysStoppedAnimation(Colors.white),
                                     ),
+                                  )
+                                : const Text(
+                                    'Login',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      color: Colors.white,
+                                    ),
+                                  ),
                           ),
                         ),
                       ),
@@ -188,36 +184,5 @@ class _LoginPageState extends State<LoginPage> {
         ],
       ),
     );
-  }
-}
-
-class ApiClient {
-  ApiClient._();
-
-  static final ApiClient instance = ApiClient._();
-  static const String baseUrl = 'http://10.0.2.2:3000';
-
-  final _cookieJar = CookieJar();
-  late final Dio dio = Dio(
-    BaseOptions(
-      baseUrl: baseUrl,
-      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-    ),
-  )..interceptors.add(CookieManager(_cookieJar));
-}
-
-class AuthService {
-  AuthService._();
-
-  static final AuthService instance = AuthService._();
-  final Dio _dio = ApiClient.instance.dio;
-
-  Future<String> login({required String name, required String password}) async {
-    final response = await _dio.post(
-      '/db/login_page/log_in',
-      data: {'name': name, 'password': password},
-      options: Options(contentType: Headers.formUrlEncodedContentType),
-    );
-    return response.data.toString();
   }
 }
