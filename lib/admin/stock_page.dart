@@ -1,4 +1,7 @@
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:cashier_app/api/stock_service.dart';
 
 class StockPage extends StatefulWidget {
   const StockPage({super.key});
@@ -15,48 +18,18 @@ class _StockPageState extends State<StockPage> {
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _priceController = TextEditingController();
 
-  int _selectedIndex = 0;
-  int _stockValue = 10;
+  int _selectedIndex = -1;
+  int _stockValue = 0;
   String _imageLabel = 'No image selected';
 
-  final List<Map<String, dynamic>> _items = [
-    {
-      "name": "Bertrand Onlyfans",
-      "price": "NT\$1000",
-      "stock": 10,
-      "imageUrl": "https://picsum.photos/seed/a/300/300",
-    },
-
-    {
-      "name": "Bertrand Onlyfans",
-      "price": "NT\$1000",
-      "stock": 10,
-      "imageUrl": "https://picsum.photos/seed/b/300/300",
-    },
-    {
-      "name": "Bertrand Onlyfans",
-      "price": "NT\$1000",
-      "stock": 10,
-      "imageUrl": "https://picsum.photos/seed/c/300/300",
-    },
-    {
-      "name": "Bertrand Onlyfans",
-      "price": "NT\$1000",
-      "stock": 10,
-      "imageUrl": "https://picsum.photos/seed/d/300/300",
-    },
-    {
-      "name": "Bertrand Onlyfans",
-      "price": "NT\$1000",
-      "stock": 10,
-      "imageUrl": "https://picsum.photos/seed/e/300/300",
-    },
-  ];
+  bool _isLoading = false;
+  String? _errorText;
+  List<StockItem> _items = [];
 
   @override
   void initState() {
     super.initState();
-    _loadSelectedItem(0);
+    _fetchItems();
   }
 
   @override
@@ -67,12 +40,49 @@ class _StockPageState extends State<StockPage> {
     super.dispose();
   }
 
+  Future<void> _fetchItems() async {
+    setState(() {
+      _isLoading = true;
+      _errorText = null;
+    });
+
+    try {
+      final items = await StockService.instance.fetchItemList();
+      setState(() {
+        _items = items;
+        if (_items.isNotEmpty) {
+          _selectedIndex = 0;
+          _loadSelectedItem(0);
+        } else {
+          _selectedIndex = -1;
+          _nameController.clear();
+          _priceController.clear();
+          _stockValue = 0;
+          _imageLabel = 'No image selected';
+        }
+      });
+    } catch (error) {
+      setState(() {
+        _errorText = 'Failed to load items.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
   void _loadSelectedItem(int index) {
+    if (index < 0 || index >= _items.length) return;
     final item = _items[index];
-    _nameController.text = item["name"] as String;
-    _priceController.text = item["price"] as String;
-    _stockValue = (item["stock"] as int?) ?? 0;
-    _imageLabel = (item["imageUrl"] as String?) ?? 'No image selected';
+    _nameController.text = item.name;
+    _priceController.text = item.price.toString();
+    _stockValue = item.currentStock;
+    _imageLabel = item.imageBase64.isNotEmpty
+        ? 'image_${item.id}.png'
+        : 'No image selected';
   }
 
   void _selectItem(int index) {
@@ -97,6 +107,132 @@ class _StockPageState extends State<StockPage> {
     if (width >= 900) return 4;
     if (width >= 650) return 3;
     return 2;
+  }
+
+  Uint8List? _decodeImage(String base64Image) {
+    if (base64Image.isEmpty) return null;
+    try {
+      return base64Decode(base64Image);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Widget _buildGrid(BuildContext context) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_errorText != null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(_errorText!),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              onPressed: _fetchItems,
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_items.isEmpty) {
+      return const Center(child: Text('No items found.'));
+    }
+
+    return LayoutBuilder(
+      builder: (context, c) {
+        final count = _calcCrossAxisCount(c.maxWidth);
+        return GridView.builder(
+          padding: const EdgeInsets.only(bottom: 8),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: count,
+            crossAxisSpacing: 16,
+            mainAxisSpacing: 16,
+            childAspectRatio: 0.78,
+          ),
+          itemCount: _items.length,
+          itemBuilder: (context, index) {
+            final item = _items[index];
+            final selected = index == _selectedIndex;
+            final imageBytes = _decodeImage(item.imageBase64);
+
+            return InkWell(
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => _selectItem(index),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: selected ? _accent : Colors.transparent,
+                    width: selected ? 2 : 1,
+                  ),
+                  boxShadow: const [
+                    BoxShadow(
+                      blurRadius: 10,
+                      spreadRadius: 0,
+                      offset: Offset(0, 3),
+                      color: Color(0x14000000),
+                    ),
+                  ],
+                ),
+                padding: const EdgeInsets.all(10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: AspectRatio(
+                          aspectRatio: 1,
+                          child: imageBytes != null
+                              ? Image.memory(imageBytes, fit: BoxFit.cover)
+                              : Container(
+                                  color: const Color(0xFFEDEDED),
+                                  child: const Icon(
+                                    Icons.image_not_supported,
+                                    size: 36,
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      item.name,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'NT\$${item.price}',
+                      style: TextStyle(
+                        color: _accent,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Stock : ${item.currentStock}',
+                      style: const TextStyle(
+                        color: Colors.grey,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -155,112 +291,7 @@ class _StockPageState extends State<StockPage> {
                       const SizedBox(height: 12),
 
                       // Grid
-                      Expanded(
-                        child: LayoutBuilder(
-                          builder: (context, c) {
-                            final count = _calcCrossAxisCount(c.maxWidth);
-                            return GridView.builder(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              gridDelegate:
-                                  SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: count,
-                                    crossAxisSpacing: 16,
-                                    mainAxisSpacing: 16,
-                                    childAspectRatio: 0.78,
-                                  ),
-                              itemCount: _items.length,
-                              itemBuilder: (context, index) {
-                                final item = _items[index];
-                                final selected = index == _selectedIndex;
-
-                                return InkWell(
-                                  borderRadius: BorderRadius.circular(12),
-                                  onTap: () => _selectItem(index),
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      color: Colors.white,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color:
-                                            selected
-                                                ? _accent
-                                                : Colors.transparent,
-                                        width: selected ? 2 : 1,
-                                      ),
-                                      boxShadow: const [
-                                        BoxShadow(
-                                          blurRadius: 10,
-                                          spreadRadius: 0,
-                                          offset: Offset(0, 3),
-                                          color: Color(0x14000000),
-                                        ),
-                                      ],
-                                    ),
-                                    padding: const EdgeInsets.all(10),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.center,
-                                      children: [
-                                        Expanded(
-                                          child: ClipRRect(
-                                            borderRadius: BorderRadius.circular(
-                                              10,
-                                            ),
-                                            child: AspectRatio(
-                                              aspectRatio: 1,
-                                              child: Image.network(
-                                                item["imageUrl"] as String,
-                                                fit: BoxFit.cover,
-                                                errorBuilder:
-                                                    (_, __, ___) => Container(
-                                                      color: const Color(
-                                                        0xFFEDEDED,
-                                                      ),
-                                                      child: const Icon(
-                                                        Icons
-                                                            .image_not_supported,
-                                                        size: 36,
-                                                      ),
-                                                    ),
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(height: 10),
-                                        Text(
-                                          item["name"] as String,
-                                          textAlign: TextAlign.center,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          item["price"] as String,
-                                          style: TextStyle(
-                                            color: _accent,
-                                            fontWeight: FontWeight.w800,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          'Stock : ${(item["stock"] as int)}',
-                                          style: const TextStyle(
-                                            color: Colors.grey,
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              },
-                            );
-                          },
-                        ),
-                      ),
+                      Expanded(child: _buildGrid(context)),
                     ],
                   ),
                 ),
@@ -304,10 +335,9 @@ class _StockPageState extends State<StockPage> {
                               children: [
                                 _stepButton(
                                   icon: Icons.remove,
-                                  onTap:
-                                      () => setState(() {
-                                        if (_stockValue > 0) _stockValue--;
-                                      }),
+                                  onTap: () => setState(() {
+                                    if (_stockValue > 0) _stockValue--;
+                                  }),
                                 ),
                                 const SizedBox(width: 10),
                                 Container(
@@ -331,10 +361,9 @@ class _StockPageState extends State<StockPage> {
                                 const SizedBox(width: 10),
                                 _stepButton(
                                   icon: Icons.add,
-                                  onTap:
-                                      () => setState(() {
-                                        _stockValue++;
-                                      }),
+                                  onTap: () => setState(() {
+                                    _stockValue++;
+                                  }),
                                 ),
                               ],
                             ),
