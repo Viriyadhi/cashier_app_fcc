@@ -1,7 +1,101 @@
 import 'package:flutter/material.dart';
+import 'package:cashier_app/api/transaction_service.dart';
 
-class HistoryPage extends StatelessWidget {
+class HistoryPage extends StatefulWidget {
   const HistoryPage({super.key});
+
+  @override
+  State<HistoryPage> createState() => _HistoryPageState();
+}
+
+class _HistoryPageState extends State<HistoryPage> {
+  final TextEditingController _searchController = TextEditingController();
+
+  bool _isLoading = false;
+  String? _errorText;
+  List<TransactionGroup> _groups = [];
+  int _selectedIndex = -1;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchHistory();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _fetchHistory() async {
+    setState(() {
+      _isLoading = true;
+      _errorText = null;
+    });
+
+    try {
+      final records = await TransactionService.instance.fetchTransactionHistory();
+      final groups = _groupByTime(records);
+
+      setState(() {
+        _groups = groups;
+        _selectedIndex = _groups.isNotEmpty ? 0 : -1;
+      });
+    } catch (error) {
+      setState(() {
+        _errorText = 'Failed to load history.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  List<TransactionGroup> _groupByTime(List<TransactionRecord> records) {
+    final Map<String, List<TransactionRecord>> grouped = {};
+    for (final record in records) {
+      final key = record.time.toIso8601String();
+      grouped.putIfAbsent(key, () => []).add(record);
+    }
+
+    final groups = grouped.entries.map((entry) {
+      final time = DateTime.parse(entry.key);
+      final items = entry.value;
+      final totalCount = items.fold<int>(0, (sum, r) => sum + r.count);
+      final rank = items.isNotEmpty ? items.first.rank : 0;
+      return TransactionGroup(
+        time: time,
+        records: items,
+        totalCount: totalCount,
+        rank: rank,
+      );
+    }).toList();
+
+    groups.sort((a, b) => b.time.compareTo(a.time));
+    return groups;
+  }
+
+  TransactionGroup? get _selectedGroup {
+    if (_selectedIndex < 0 || _selectedIndex >= _groups.length) return null;
+    return _groups[_selectedIndex];
+  }
+
+  String _formatDate(DateTime time) {
+    final y = time.year.toString().padLeft(4, '0');
+    final m = time.month.toString().padLeft(2, '0');
+    final d = time.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
+
+  String _formatTime(DateTime time) {
+    final h = time.hour.toString().padLeft(2, '0');
+    final m = time.minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -9,6 +103,8 @@ class HistoryPage extends StatelessWidget {
     const panelShadow = [
       BoxShadow(blurRadius: 14, offset: Offset(0, 5), color: Color(0x14000000)),
     ];
+
+    final selectedGroup = _selectedGroup;
 
     return Scaffold(
       backgroundColor: mintBg,
@@ -33,15 +129,17 @@ class HistoryPage extends StatelessWidget {
                       Row(
                         children: [
                           Row(
-                            children: const [
-                              Icon(Icons.chevron_left, color: Colors.grey),
-                              SizedBox(width: 6),
+                            children: [
+                              const Icon(Icons.chevron_left, color: Colors.grey),
+                              const SizedBox(width: 6),
                               Text(
-                                'Tue, 2 Dec',
-                                style: TextStyle(fontWeight: FontWeight.w600),
+                                selectedGroup == null
+                                    ? 'Recent'
+                                    : _formatDate(selectedGroup.time),
+                                style: const TextStyle(fontWeight: FontWeight.w600),
                               ),
-                              SizedBox(width: 6),
-                              Icon(Icons.chevron_right, color: Colors.grey),
+                              const SizedBox(width: 6),
+                              const Icon(Icons.chevron_right, color: Colors.grey),
                             ],
                           ),
                           const Spacer(),
@@ -49,7 +147,8 @@ class HistoryPage extends StatelessWidget {
                             width: 320,
                             height: 42,
                             child: TextField(
-                              decoration: InputDecoration(
+                              controller: _searchController,
+                              decoration: const InputDecoration(
                                 prefixIcon: Icon(Icons.search),
                                 hintText: 'search items here',
                                 filled: true,
@@ -119,34 +218,7 @@ class HistoryPage extends StatelessWidget {
 
                       // Rows
                       Expanded(
-                        child: ListView.separated(
-                          itemCount: 12,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
-                          itemBuilder: (context, index) {
-                            final selected = index == 0;
-
-                            return Container(
-                              height: 46,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                              ),
-                              decoration: BoxDecoration(
-                                color:
-                                    selected
-                                        ? const Color(0xFFE9E9E9)
-                                        : Colors.transparent,
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Row(
-                                children: const [
-                                  Expanded(flex: 3, child: Text('#B3RT0D1')),
-                                  Expanded(flex: 2, child: Text('13:57')),
-                                  Expanded(flex: 2, child: Text('3292元')),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
+                        child: _buildRows(),
                       ),
                     ],
                   ),
@@ -230,22 +302,7 @@ class HistoryPage extends StatelessWidget {
                           // items list
                           SizedBox(
                             height: 220,
-                            child: ListView(
-                              children: const [
-                                _ContentRow(
-                                  name: 'Bertrand Onlyfans',
-                                  qty: '3',
-                                  price: '3000元',
-                                ),
-                                Divider(height: 1),
-                                _ContentRow(
-                                  name: 'Pacar Cina',
-                                  qty: '3',
-                                  price: '300元',
-                                ),
-                                Divider(height: 1),
-                              ],
-                            ),
+                            child: _buildContentList(selectedGroup),
                           ),
 
                           const Divider(height: 1),
@@ -254,14 +311,29 @@ class HistoryPage extends StatelessWidget {
                           Padding(
                             padding: const EdgeInsets.all(12),
                             child: Column(
-                              children: const [
-                                _SummaryRow(label: 'Discount (%)', value: '5%'),
-                                SizedBox(height: 10),
-                                _SummaryRow(label: 'Sub Total', value: '3135元'),
-                                SizedBox(height: 10),
+                              children: [
                                 _SummaryRow(
-                                  label: 'Tax 5% (VAT)',
-                                  value: '157元',
+                                  label: 'Rank',
+                                  value:
+                                      selectedGroup == null
+                                          ? '-'
+                                          : '#${selectedGroup.rank}',
+                                ),
+                                const SizedBox(height: 10),
+                                _SummaryRow(
+                                  label: 'Items',
+                                  value:
+                                      selectedGroup == null
+                                          ? '-'
+                                          : '${selectedGroup.totalCount}',
+                                ),
+                                const SizedBox(height: 10),
+                                _SummaryRow(
+                                  label: 'Lines',
+                                  value:
+                                      selectedGroup == null
+                                          ? '-'
+                                          : '${selectedGroup.records.length}',
                                 ),
                               ],
                             ),
@@ -276,18 +348,20 @@ class HistoryPage extends StatelessWidget {
                               vertical: 14,
                             ),
                             child: Row(
-                              children: const [
-                                Text(
+                              children: [
+                                const Text(
                                   'Total',
                                   style: TextStyle(
                                     fontWeight: FontWeight.w800,
                                     fontSize: 16,
                                   ),
                                 ),
-                                Spacer(),
+                                const Spacer(),
                                 Text(
-                                  '3292元',
-                                  style: TextStyle(
+                                  selectedGroup == null
+                                      ? '-'
+                                      : '${selectedGroup.totalCount} items',
+                                  style: const TextStyle(
                                     fontWeight: FontWeight.w800,
                                     fontSize: 16,
                                   ),
@@ -327,6 +401,104 @@ class HistoryPage extends StatelessWidget {
       ),
     );
   }
+
+  Widget _buildRows() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_errorText != null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(_errorText!),
+            const SizedBox(height: 12),
+            OutlinedButton(
+              onPressed: _fetchHistory,
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_groups.isEmpty) {
+      return const Center(child: Text('No transactions found.'));
+    }
+
+    return ListView.separated(
+      itemCount: _groups.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        final group = _groups[index];
+        final selected = index == _selectedIndex;
+
+        return InkWell(
+          onTap: () {
+            setState(() {
+              _selectedIndex = index;
+            });
+          },
+          child: Container(
+            height: 46,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              color: selected ? const Color(0xFFE9E9E9) : Colors.transparent,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(
+              children: [
+                Expanded(flex: 3, child: Text('TXN ${index + 1}')),
+                Expanded(flex: 2, child: Text(_formatTime(group.time))),
+                Expanded(
+                  flex: 2,
+                  child: Text('${group.totalCount}'),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildContentList(TransactionGroup? group) {
+    if (group == null) {
+      return const Center(child: Text('Select a transaction'));
+    }
+
+    if (group.records.isEmpty) {
+      return const Center(child: Text('No items.'));
+    }
+
+    return ListView.separated(
+      itemCount: group.records.length,
+      separatorBuilder: (_, __) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        final record = group.records[index];
+        return _ContentRow(
+          name: 'Item #${record.itemId}',
+          qty: record.count.toString(),
+          price: '-',
+        );
+      },
+    );
+  }
+}
+
+class TransactionGroup {
+  TransactionGroup({
+    required this.time,
+    required this.records,
+    required this.totalCount,
+    required this.rank,
+  });
+
+  final DateTime time;
+  final List<TransactionRecord> records;
+  final int totalCount;
+  final int rank;
 }
 
 class _ContentRow extends StatelessWidget {
