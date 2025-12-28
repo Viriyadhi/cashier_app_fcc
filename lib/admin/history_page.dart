@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:cashier_app/api/transaction_service.dart';
+import 'package:cashier_app/api/history_service.dart';
 
 class HistoryPage extends StatefulWidget {
   const HistoryPage({super.key});
@@ -35,7 +35,8 @@ class _HistoryPageState extends State<HistoryPage> {
     });
 
     try {
-      final records = await TransactionService.instance.fetchTransactionHistory();
+      final records =
+          await TransactionService.instance.fetchTransactionHistory();
       final groups = _groupByTime(records);
 
       setState(() {
@@ -62,18 +63,19 @@ class _HistoryPageState extends State<HistoryPage> {
       grouped.putIfAbsent(key, () => []).add(record);
     }
 
-    final groups = grouped.entries.map((entry) {
-      final time = DateTime.parse(entry.key);
-      final items = entry.value;
-      final totalCount = items.fold<int>(0, (sum, r) => sum + r.count);
-      final rank = items.isNotEmpty ? items.first.rank : 0;
-      return TransactionGroup(
-        time: time,
-        records: items,
-        totalCount: totalCount,
-        rank: rank,
-      );
-    }).toList();
+    final groups =
+        grouped.entries.map((entry) {
+          final time = DateTime.parse(entry.key);
+          final items = entry.value;
+          final totalCount = items.fold<int>(0, (sum, r) => sum + r.count);
+          final rank = items.isNotEmpty ? items.first.rank : 0;
+          return TransactionGroup(
+            time: time,
+            records: items,
+            totalCount: totalCount,
+            rank: rank,
+          );
+        }).toList();
 
     groups.sort((a, b) => b.time.compareTo(a.time));
     return groups;
@@ -130,16 +132,24 @@ class _HistoryPageState extends State<HistoryPage> {
                         children: [
                           Row(
                             children: [
-                              const Icon(Icons.chevron_left, color: Colors.grey),
+                              const Icon(
+                                Icons.chevron_left,
+                                color: Colors.grey,
+                              ),
                               const SizedBox(width: 6),
                               Text(
                                 selectedGroup == null
                                     ? 'Recent'
                                     : _formatDate(selectedGroup.time),
-                                style: const TextStyle(fontWeight: FontWeight.w600),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                               const SizedBox(width: 6),
-                              const Icon(Icons.chevron_right, color: Colors.grey),
+                              const Icon(
+                                Icons.chevron_right,
+                                color: Colors.grey,
+                              ),
                             ],
                           ),
                           const Spacer(),
@@ -217,9 +227,7 @@ class _HistoryPageState extends State<HistoryPage> {
                       const SizedBox(height: 8),
 
                       // Rows
-                      Expanded(
-                        child: _buildRows(),
-                      ),
+                      Expanded(child: _buildRows()),
                     ],
                   ),
                 ),
@@ -451,10 +459,7 @@ class _HistoryPageState extends State<HistoryPage> {
               children: [
                 Expanded(flex: 3, child: Text('TXN ${index + 1}')),
                 Expanded(flex: 2, child: Text(_formatTime(group.time))),
-                Expanded(
-                  flex: 2,
-                  child: Text('${group.totalCount}'),
-                ),
+                Expanded(flex: 2, child: Text('${group.totalCount}')),
               ],
             ),
           ),
