@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:cashier_app/api/stock_service.dart';
 
 class StockPage extends StatefulWidget {
@@ -92,7 +93,7 @@ class _StockPageState extends State<StockPage> {
     });
   }
 
-  void _addNewItem() {
+  void _resetSelection() {
     setState(() {
       _selectedIndex = -1;
       _nameController.clear();
@@ -116,6 +117,254 @@ class _StockPageState extends State<StockPage> {
     } catch (_) {
       return null;
     }
+  }
+
+  Future<void> _openAddItemDialog() async {
+    final nameController = TextEditingController();
+    final priceController = TextEditingController();
+    final stockController = TextEditingController();
+    XFile? selectedImage;
+    bool isSaving = false;
+    String? dialogError;
+
+    final picker = ImagePicker();
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            Future<void> pickImage() async {
+              final file = await picker.pickImage(source: ImageSource.gallery);
+              if (file != null) {
+                setDialogState(() {
+                  selectedImage = file;
+                });
+              }
+            }
+
+            Future<void> saveItem() async {
+              final name = nameController.text.trim();
+              final price = int.tryParse(priceController.text.trim());
+              final stock = int.tryParse(stockController.text.trim());
+
+              if (name.isEmpty || price == null || stock == null) {
+                setDialogState(() {
+                  dialogError = 'Please enter valid name, price, and stock.';
+                });
+                return;
+              }
+
+              setDialogState(() {
+                isSaving = true;
+                dialogError = null;
+              });
+
+              try {
+                await StockService.instance.createItem(
+                  name: name,
+                  stock: stock,
+                  price: price,
+                  imagePath: selectedImage?.path,
+                );
+                if (!mounted) return;
+                Navigator.pop(context);
+                _resetSelection();
+                _fetchItems();
+              } catch (error) {
+                setDialogState(() {
+                  dialogError = 'Failed to save item.';
+                  isSaving = false;
+                });
+              }
+            }
+
+            return Dialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: SizedBox(
+                width: 720,
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Text(
+                            'Add New Item',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF0C6B45),
+                            ),
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            onPressed: () => Navigator.pop(context),
+                            icon: const Icon(Icons.close),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          InkWell(
+                            onTap: pickImage,
+                            borderRadius: BorderRadius.circular(12),
+                            child: Container(
+                              width: 170,
+                              height: 170,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF0C6B45),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: selectedImage == null
+                                  ? Column(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: const [
+                                        Icon(
+                                          Icons.add_photo_alternate,
+                                          color: Colors.white,
+                                          size: 42,
+                                        ),
+                                        SizedBox(height: 10),
+                                        Text(
+                                          'Add Image',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
+                                    )
+                                  : ClipRRect(
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: Image.network(
+                                        selectedImage!.path,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) {
+                                          return const Center(
+                                            child: Icon(
+                                              Icons.image,
+                                              color: Colors.white,
+                                              size: 40,
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ),
+                            ),
+                          ),
+                          const SizedBox(width: 20),
+                          Expanded(
+                            child: Column(
+                              children: [
+                                _dialogField(
+                                  controller: nameController,
+                                  hintText: 'Item Name',
+                                ),
+                                const SizedBox(height: 12),
+                                _dialogField(
+                                  controller: priceController,
+                                  hintText: 'Price',
+                                  keyboardType: TextInputType.number,
+                                ),
+                                const SizedBox(height: 12),
+                                _dialogField(
+                                  controller: stockController,
+                                  hintText: 'Stock',
+                                  keyboardType: TextInputType.number,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (dialogError != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Text(
+                            dialogError!,
+                            style: TextStyle(color: Colors.red.shade700),
+                          ),
+                        ),
+                      const SizedBox(height: 20),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          OutlinedButton(
+                            onPressed: isSaving ? null : () => Navigator.pop(context),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF0C6B45),
+                              side: const BorderSide(color: Color(0xFF0C6B45)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(24),
+                              ),
+                            ),
+                            child: const Text('Discard'),
+                          ),
+                          const SizedBox(width: 12),
+                          ElevatedButton(
+                            onPressed: isSaving ? null : saveItem,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF0C6B45),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(24),
+                              ),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                                vertical: 12,
+                              ),
+                            ),
+                            child: isSaving
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor:
+                                          AlwaysStoppedAnimation(Colors.white),
+                                    ),
+                                  )
+                                : const Text('Save'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _dialogField({
+    required TextEditingController controller,
+    required String hintText,
+    TextInputType? keyboardType,
+  }) {
+    return TextField(
+      controller: controller,
+      keyboardType: keyboardType,
+      decoration: InputDecoration(
+        hintText: hintText,
+        filled: true,
+        fillColor: const Color(0xFFF3F8F6),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
   }
 
   Widget _buildGrid(BuildContext context) {
@@ -254,7 +503,7 @@ class _StockPageState extends State<StockPage> {
                       Row(
                         children: [
                           TextButton.icon(
-                            onPressed: _addNewItem,
+                            onPressed: _openAddItemDialog,
                             icon: Icon(Icons.add, color: _accent),
                             label: Text(
                               'ADD NEW ITEM',

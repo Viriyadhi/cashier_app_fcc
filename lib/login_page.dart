@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:cashier_app/widget/admin_navigation.dart';
+import 'package:cashier_app/cashier/cashier_page.dart';
 import 'package:cashier_app/api/auth_service.dart';
 
 class LoginPage extends StatefulWidget {
@@ -35,11 +36,17 @@ class _LoginPageState extends State<LoginPage> {
         password: _passwordController.text,
       );
 
-      if (result == '1' || result == '0') {
-        if (!context.mounted) return;
+      if (!context.mounted) return;
+
+      if (result == '1') {
         Navigator.push(
           context,
           MaterialPageRoute(builder: (context) => const AdminNavigation()),
+        );
+      } else if (result == '0') {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const CashierPage()),
         );
       } else {
         setState(() {

@@ -68,4 +68,38 @@ class StockService {
 
     throw Exception('Unexpected response');
   }
+
+  Future<String> createItem({
+    required String name,
+    required int stock,
+    required int price,
+    String? imagePath,
+  }) async {
+    final form = FormData.fromMap({
+      'name': name,
+      'stock': stock.toString(),
+      'price': price.toString(),
+    });
+
+    if (imagePath != null && imagePath.isNotEmpty) {
+      form.files.add(
+        MapEntry(
+          'icon',
+          await MultipartFile.fromFile(imagePath),
+        ),
+      );
+    }
+
+    final response = await _dio.post(
+      '/db/stock_page/new_item',
+      data: form,
+      options: Options(contentType: 'multipart/form-data'),
+    );
+
+    final body = response.data.toString();
+    if (body == 'err from sql') {
+      throw Exception('Server returned error');
+    }
+    return body;
+  }
 }
