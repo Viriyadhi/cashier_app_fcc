@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cashier_app/api/stock_service.dart';
+import 'package:cashier_app/api/transaction_service.dart';
 import 'package:flutter/material.dart';
 
 class CashierPage extends StatefulWidget {
@@ -16,7 +17,10 @@ class _CashierPageState extends State<CashierPage> {
   bool _isLoading = false;
   String? _errorText;
   List<StockItem> _items = [];
+  final Map<int, _CartEntry> _cart = {};
   String _searchQuery = '';
+  int _selectedCategoryIndex = 0;
+  bool _isSubmitting = false;
 
   void onLogoutTap() {}
 
@@ -43,6 +47,7 @@ class _CashierPageState extends State<CashierPage> {
       if (!mounted) return;
       setState(() {
         _items = items;
+        _syncCartWithItems(items);
       });
     } catch (_) {
       if (!mounted) return;
@@ -64,21 +69,141 @@ class _CashierPageState extends State<CashierPage> {
     });
   }
 
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _submitTransaction() async {
+    if (_cart.isEmpty) {
+      _showSnackBar('Cart is empty.');
+      return;
+    }
+    if (_isSubmitting) return;
+
+    final payload = <String, int>{
+      for (final entry in _cart.values) entry.item.id.toString(): entry.qty,
+    };
+
+    setState(() {
+      _isSubmitting = true;
+    });
+
+    try {
+      await TransactionService.instance.createTransaction(payload);
+      if (!mounted) return;
+      setState(() {
+        _cart.clear();
+      });
+      await _fetchItems();
+      if (!mounted) return;
+      _showSnackBar('Payment successful.');
+    } catch (_) {
+      if (!mounted) return;
+      _showSnackBar('Payment failed. Please try again.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSubmitting = false;
+        });
+      }
+    }
+  }
+
+  void _syncCartWithItems(List<StockItem> items) {
+    if (_cart.isEmpty) return;
+    final byId = {for (final item in items) item.id: item};
+    for (final id in _cart.keys.toList()) {
+      final item = byId[id];
+      if (item == null) {
+        _cart.remove(id);
+      } else {
+        _cart[id] = _CartEntry(item: item, qty: _cart[id]!.qty);
+      }
+    }
+  }
+
+  void _addToCart(StockItem item) {
+    setState(() {
+      final entry = _cart[item.id];
+      if (entry == null) {
+        _cart[item.id] = _CartEntry(item: item, qty: 1);
+      } else {
+        _cart[item.id] = entry.copyWith(qty: entry.qty + 1);
+      }
+    });
+  }
+
+  void _incrementCartItem(int itemId) {
+    final entry = _cart[itemId];
+    if (entry == null) return;
+    setState(() {
+      _cart[itemId] = entry.copyWith(qty: entry.qty + 1);
+    });
+  }
+
+  void _decrementCartItem(int itemId) {
+    final entry = _cart[itemId];
+    if (entry == null) return;
+    setState(() {
+      if (entry.qty <= 1) {
+        _cart.remove(itemId);
+      } else {
+        _cart[itemId] = entry.copyWith(qty: entry.qty - 1);
+      }
+    });
+  }
+
+  void _removeCartItem(int itemId) {
+    setState(() {
+      _cart.remove(itemId);
+    });
+  }
+
+  void _selectCategory(int index) {
+    setState(() {
+      _selectedCategoryIndex = index;
+    });
+  }
+
   List<StockItem> get _filteredItems {
-    if (_searchQuery.isEmpty) return _items;
-    final query = _searchQuery.toLowerCase();
-    return _items
-        .where((item) => item.name.toLowerCase().contains(query))
-        .toList();
+    final query = _searchQuery.toLowerCase().trim();
+    final selected = _categoryOptions[_selectedCategoryIndex];
+    final knownTypes =
+        _categoryOptions
+            .where((category) => !category.isAll && !category.isOthers)
+            .expand((category) => category.matchTypes)
+            .toSet();
+
+    final filtered =
+        _items.where((item) {
+          final name = item.name.toLowerCase();
+          final matchesSearch = query.isEmpty || name.contains(query);
+          if (!matchesSearch) return false;
+
+          final type = item.type?.toLowerCase().trim() ?? '';
+          if (selected.isAll) return true;
+          if (selected.isOthers) {
+            return type.isEmpty || !knownTypes.contains(type);
+          }
+          return selected.matchTypes.contains(type);
+        }).toList();
+
+    filtered.sort(
+      (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+    );
+    return filtered;
   }
 
   @override
   Widget build(BuildContext context) {
     final catalogItems = _filteredItems;
-    const checkoutItems = [
-      _CheckoutItem(name: 'Bertrand Onlyfans', qty: 3, price: 'NT\$3000'),
-      _CheckoutItem(name: 'Pacar Cina', qty: 2, price: 'NT\$300'),
-    ];
+    final checkoutItems = _cart.values.toList();
+    final total = _cart.values.fold<int>(
+      0,
+      (sum, entry) => sum + (entry.item.price * entry.qty),
+    );
 
     return Scaffold(
       backgroundColor: const Color(0xFFEAF7F0),
@@ -104,11 +229,21 @@ class _CashierPageState extends State<CashierPage> {
                             errorText: _errorText,
                             searchController: _searchController,
                             onSearchChanged: _updateSearch,
+                            categories: _categoryOptions,
+                            selectedCategoryIndex: _selectedCategoryIndex,
+                            onCategorySelected: _selectCategory,
+                            onItemTap: _addToCart,
                           ),
                           const SizedBox(height: 16),
                           CheckoutPanel(
                             isNarrow: isNarrow,
                             items: checkoutItems,
+                            total: total,
+                            onIncrement: _incrementCartItem,
+                            onDecrement: _decrementCartItem,
+                            onRemove: _removeCartItem,
+                            onPay: _submitTransaction,
+                            isPaying: _isSubmitting,
                           ),
                         ],
                       ),
@@ -128,6 +263,10 @@ class _CashierPageState extends State<CashierPage> {
                             errorText: _errorText,
                             searchController: _searchController,
                             onSearchChanged: _updateSearch,
+                            categories: _categoryOptions,
+                            selectedCategoryIndex: _selectedCategoryIndex,
+                            onCategorySelected: _selectCategory,
+                            onItemTap: _addToCart,
                           ),
                         ),
                         const SizedBox(width: 16),
@@ -136,6 +275,12 @@ class _CashierPageState extends State<CashierPage> {
                           child: CheckoutPanel(
                             isNarrow: isNarrow,
                             items: checkoutItems,
+                            total: total,
+                            onIncrement: _incrementCartItem,
+                            onDecrement: _decrementCartItem,
+                            onRemove: _removeCartItem,
+                            onPay: _submitTransaction,
+                            isPaying: _isSubmitting,
                           ),
                         ),
                       ],
@@ -221,6 +366,10 @@ class CatalogPanel extends StatelessWidget {
     required this.errorText,
     required this.searchController,
     required this.onSearchChanged,
+    required this.categories,
+    required this.selectedCategoryIndex,
+    required this.onCategorySelected,
+    required this.onItemTap,
   });
 
   final bool isNarrow;
@@ -229,6 +378,10 @@ class CatalogPanel extends StatelessWidget {
   final String? errorText;
   final TextEditingController searchController;
   final ValueChanged<String> onSearchChanged;
+  final List<_CategoryOption> categories;
+  final int selectedCategoryIndex;
+  final ValueChanged<int> onCategorySelected;
+  final ValueChanged<StockItem> onItemTap;
 
   @override
   Widget build(BuildContext context) {
@@ -243,7 +396,10 @@ class CatalogPanel extends StatelessWidget {
         mainAxisSpacing: 16,
         childAspectRatio: 0.78,
       ),
-      itemBuilder: (context, index) => CatalogItemCard(item: items[index]),
+      itemBuilder: (context, index) {
+        final item = items[index];
+        return CatalogItemCard(item: item, onTap: () => onItemTap(item));
+      },
     );
 
     final gridBody =
@@ -295,7 +451,11 @@ class CatalogPanel extends StatelessWidget {
       children: [
         if (isNarrow) gridContainer else Expanded(child: gridContainer),
         const SizedBox(height: 12),
-        const CategoryBar(),
+        CategoryBar(
+          categories: categories,
+          selectedIndex: selectedCategoryIndex,
+          onCategorySelected: onCategorySelected,
+        ),
       ],
     );
   }
@@ -367,23 +527,50 @@ class SearchBarField extends StatelessWidget {
   }
 }
 
-class CategoryBar extends StatelessWidget {
-  const CategoryBar({super.key});
+const List<_CategoryOption> _categoryOptions = [
+  _CategoryOption(label: 'All', icon: Icons.apps, isAll: true),
+  _CategoryOption(
+    label: 'Food',
+    icon: Icons.fastfood,
+    matchTypes: ['food', 'foods'],
+  ),
+  _CategoryOption(
+    label: 'Beverage',
+    icon: Icons.local_cafe,
+    matchTypes: ['drnk', 'drink', 'drinks', 'beverage', 'beverages'],
+  ),
+  _CategoryOption(
+    label: 'Snacks',
+    icon: Icons.local_pizza,
+    matchTypes: ['snack', 'snacks'],
+  ),
+  _CategoryOption(label: 'Others', icon: Icons.category, isOthers: true),
+];
 
-  static const categories = [
-    _CategoryData(label: 'All', icon: Icons.apps, isSelected: true),
-    _CategoryData(label: 'Food', icon: Icons.fastfood),
-    _CategoryData(label: 'Beverage', icon: Icons.local_cafe),
-    _CategoryData(label: 'Snacks', icon: Icons.local_pizza),
-    _CategoryData(label: 'Others', icon: Icons.category),
-  ];
+class CategoryBar extends StatelessWidget {
+  const CategoryBar({
+    super.key,
+    required this.categories,
+    required this.selectedIndex,
+    required this.onCategorySelected,
+  });
+
+  final List<_CategoryOption> categories;
+  final int selectedIndex;
+  final ValueChanged<int> onCategorySelected;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
         for (var index = 0; index < categories.length; index++) ...[
-          Expanded(child: CategoryChip(data: categories[index])),
+          Expanded(
+            child: CategoryChip(
+              data: categories[index],
+              isSelected: index == selectedIndex,
+              onTap: () => onCategorySelected(index),
+            ),
+          ),
           if (index != categories.length - 1) const SizedBox(width: 12),
         ],
       ],
@@ -392,41 +579,55 @@ class CategoryBar extends StatelessWidget {
 }
 
 class CategoryChip extends StatelessWidget {
-  const CategoryChip({super.key, required this.data});
+  const CategoryChip({
+    super.key,
+    required this.data,
+    required this.isSelected,
+    required this.onTap,
+  });
 
-  final _CategoryData data;
+  final _CategoryOption data;
+  final bool isSelected;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final bg = data.isSelected ? const Color(0xFFE7FFF4) : Colors.white;
+    final bg = isSelected ? const Color(0xFFE7FFF4) : Colors.white;
     final border =
-        data.isSelected ? const Color(0xFF27DD8E) : const Color(0xFFD6E9DD);
+        isSelected ? const Color(0xFF27DD8E) : const Color(0xFFD6E9DD);
     final contentColor =
-        data.isSelected ? const Color(0xFF27DD8E) : const Color(0xFF7D8C86);
+        isSelected ? const Color(0xFF27DD8E) : const Color(0xFF7D8C86);
 
-    return Container(
-      alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-      decoration: BoxDecoration(
-        color: bg,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: border),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Icon(data.icon, color: contentColor, size: 22),
-          const SizedBox(height: 6),
-          Text(
-            data.label,
-            style: TextStyle(
-              color: contentColor,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
+        child: Container(
+          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: border),
           ),
-        ],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Icon(data.icon, color: contentColor, size: 22),
+              const SizedBox(height: 6),
+              Text(
+                data.label,
+                style: TextStyle(
+                  color: contentColor,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -442,77 +643,102 @@ Uint8List? _decodeBase64Image(String base64Image) {
 }
 
 class CatalogItemCard extends StatelessWidget {
-  const CatalogItemCard({super.key, required this.item});
+  const CatalogItemCard({super.key, required this.item, required this.onTap});
 
   final StockItem item;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final imageBytes = _decodeBase64Image(item.imageBase64);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFFF6F6F6),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE5E5E5)),
-      ),
-      padding: const EdgeInsets.all(10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: const Color(0xFFECECEC),
-                borderRadius: BorderRadius.circular(8),
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(10),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFFF6F6F6),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFFE5E5E5)),
+          ),
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFECECEC),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Center(
+                    child:
+                        imageBytes == null
+                            ? const Icon(
+                              Icons.image_outlined,
+                              color: Color(0xFF9E9E9E),
+                              size: 32,
+                            )
+                            : ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.memory(
+                                imageBytes,
+                                fit: BoxFit.cover,
+                                width: double.infinity,
+                                height: double.infinity,
+                              ),
+                            ),
+                  ),
+                ),
               ),
-              child: Center(
-                child:
-                    imageBytes == null
-                        ? const Icon(
-                          Icons.image_outlined,
-                          color: Color(0xFF9E9E9E),
-                          size: 32,
-                        )
-                        : ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Image.memory(
-                            imageBytes,
-                            fit: BoxFit.cover,
-                            width: double.infinity,
-                            height: double.infinity,
-                          ),
-                        ),
+              const SizedBox(height: 8),
+              Text(
+                item.name,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
-            ),
+              const SizedBox(height: 4),
+              Text(
+                'NT\$${item.price}',
+                style: const TextStyle(
+                  color: Color(0xFF27DD8E),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
-          Text(
-            item.name,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'NT\$${item.price}',
-            style: const TextStyle(
-              color: Color(0xFF27DD8E),
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
 class CheckoutPanel extends StatelessWidget {
-  const CheckoutPanel({super.key, required this.isNarrow, required this.items});
+  const CheckoutPanel({
+    super.key,
+    required this.isNarrow,
+    required this.items,
+    required this.total,
+    required this.onIncrement,
+    required this.onDecrement,
+    required this.onRemove,
+    required this.onPay,
+    required this.isPaying,
+  });
 
   final bool isNarrow;
-  final List<_CheckoutItem> items;
+  final List<_CartEntry> items;
+  final int total;
+  final ValueChanged<int> onIncrement;
+  final ValueChanged<int> onDecrement;
+  final ValueChanged<int> onRemove;
+  final VoidCallback onPay;
+  final bool isPaying;
 
   @override
   Widget build(BuildContext context) {
@@ -520,125 +746,171 @@ class CheckoutPanel extends StatelessWidget {
     const mutedText = Color(0xFF8A9691);
     const titleColor = Color(0xFF137048);
 
-    final list = ListView.separated(
-      itemCount: items.length,
-      shrinkWrap: isNarrow,
-      physics: isNarrow ? const NeverScrollableScrollPhysics() : null,
-      padding: EdgeInsets.zero,
-      separatorBuilder:
-          (_, __) => const Divider(height: 16, color: borderColor),
-      itemBuilder: (context, index) => CheckoutItemRow(item: items[index]),
-    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // ✅ FIX: responsive widths + scaleDown to prevent overflow
+        final maxW = constraints.maxWidth;
+        final isCompact = maxW < 360;
 
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: borderColor),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x22000000),
-            blurRadius: 12,
-            offset: Offset(0, 4),
+        final qtyWidth = (maxW * 0.34).clamp(84.0, 120.0);
+        final priceWidth = (maxW * 0.22).clamp(64.0, 92.0);
+
+        final layout = _CheckoutLayout(
+          leadingWidth: isCompact ? 20 : 24,
+          iconSize: isCompact ? 14 : 16,
+          gapWidth: isCompact ? 4 : 6,
+          qtyWidth: qtyWidth,
+          priceWidth: priceWidth,
+          qtyPadding: isCompact ? 4 : 6,
+          qtySpacing: isCompact ? 3 : 4,
+          qtyIconSize: isCompact ? 18 : 22,
+          qtyIconInnerSize: isCompact ? 12 : 14,
+        );
+
+        final list = ListView.separated(
+          itemCount: items.length,
+          shrinkWrap: isNarrow,
+          physics: isNarrow ? const NeverScrollableScrollPhysics() : null,
+          padding: EdgeInsets.zero,
+          separatorBuilder:
+              (_, __) => const Divider(height: 16, color: borderColor),
+          itemBuilder: (context, index) {
+            final item = items[index];
+            return CheckoutItemRow(
+              item: item,
+              onIncrement: () => onIncrement(item.item.id),
+              onDecrement: () => onDecrement(item.item.id),
+              onRemove: () => onRemove(item.item.id),
+              layout: layout,
+            );
+          },
+        );
+
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: borderColor),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x22000000),
+                blurRadius: 12,
+                offset: Offset(0, 4),
+              ),
+            ],
           ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            'Checkout',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: titleColor,
-              fontSize: 14,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 10),
-          const Divider(height: 1, color: borderColor),
-          const SizedBox(height: 8),
-          Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(width: 24),
-              const Expanded(
-                child: Text(
-                  'Name',
-                  style: TextStyle(
-                    color: mutedText,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                  ),
+              const Text(
+                'Checkout',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: titleColor,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
-              SizedBox(
-                width: 76,
-                child: Text(
-                  'QTY',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: mutedText,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
+              const SizedBox(height: 10),
+              const Divider(height: 1, color: borderColor),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  SizedBox(width: layout.leadingWidth),
+                  Expanded(
+                    child: Text(
+                      'Name',
+                      style: const TextStyle(
+                        color: mutedText,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
-                ),
+                  SizedBox(
+                    width: layout.qtyWidth,
+                    child: Text(
+                      'QTY',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: mutedText,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: layout.priceWidth,
+                    child: Text(
+                      'Price',
+                      textAlign: TextAlign.end,
+                      style: const TextStyle(
+                        color: mutedText,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
               ),
+              const SizedBox(height: 8),
+              const Divider(height: 1, color: borderColor),
+              const SizedBox(height: 8),
+              if (isNarrow) list else Expanded(child: list),
+              const SizedBox(height: 8),
+              const Divider(height: 1, color: borderColor),
+              const SizedBox(height: 6),
+              _SummaryRow(
+                label: 'Total',
+                value: 'NT\$$total',
+                isEmphasis: true,
+              ),
+              const SizedBox(height: 10),
               SizedBox(
-                width: 56,
-                child: Text(
-                  'Price',
-                  textAlign: TextAlign.end,
-                  style: TextStyle(
-                    color: mutedText,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: total == 0 || isPaying ? null : onPay,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF27DD8E),
+                    foregroundColor: const Color(0xFF0D5A39),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  child: Text(
+                    isPaying ? 'Processing...' : 'Pay (NT\$$total)',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          const Divider(height: 1, color: borderColor),
-          const SizedBox(height: 8),
-          if (isNarrow) list else Expanded(child: list),
-          const SizedBox(height: 8),
-          const Divider(height: 1, color: borderColor),
-          const SizedBox(height: 6),
-          const _SummaryRow(
-            label: 'Total',
-            value: 'NT\$3292',
-            isEmphasis: true,
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () {},
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF27DD8E),
-                foregroundColor: const Color(0xFF0D5A39),
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
-                ),
-              ),
-              child: const Text(
-                'Pay (NT\$3292)',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-              ),
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
 
 class CheckoutItemRow extends StatelessWidget {
-  const CheckoutItemRow({super.key, required this.item});
+  const CheckoutItemRow({
+    super.key,
+    required this.item,
+    required this.onIncrement,
+    required this.onDecrement,
+    required this.onRemove,
+    required this.layout,
+  });
 
-  final _CheckoutItem item;
+  final _CartEntry item;
+  final VoidCallback onIncrement;
+  final VoidCallback onDecrement;
+  final VoidCallback onRemove;
+  final _CheckoutLayout layout;
 
   @override
   Widget build(BuildContext context) {
@@ -647,55 +919,89 @@ class CheckoutItemRow extends StatelessWidget {
 
     return Row(
       children: [
-        const SizedBox(
-          width: 18,
-          child: Icon(Icons.delete_outline, size: 16, color: mutedText),
+        SizedBox(
+          width: layout.leadingWidth - layout.gapWidth,
+          child: InkResponse(
+            onTap: onRemove,
+            radius: 14,
+            child: Icon(
+              Icons.delete_outline,
+              size: layout.iconSize,
+              color: mutedText,
+            ),
+          ),
         ),
-        const SizedBox(width: 6),
+        SizedBox(width: layout.gapWidth),
         Expanded(
           child: Text(
-            item.name,
+            item.item.name,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
           ),
         ),
+
+        // ✅ FIX: scaleDown so QTY pill never overflows
         SizedBox(
-          width: 76,
+          width: layout.qtyWidth,
           child: Center(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-              decoration: BoxDecoration(
-                border: Border.all(color: qtyBorder),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const _QtyIcon(icon: Icons.remove),
-                  const SizedBox(width: 6),
-                  Text(
-                    item.qty.toString(),
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 12,
-                      color: Color(0xFF2F6E54),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: layout.qtyPadding,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  border: Border.all(color: qtyBorder),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _QtyIcon(
+                      icon: Icons.remove,
+                      onTap: onDecrement,
+                      size: layout.qtyIconSize,
+                      iconSize: layout.qtyIconInnerSize,
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  const _QtyIcon(icon: Icons.add),
-                ],
+                    SizedBox(width: layout.qtySpacing),
+                    Text(
+                      item.qty.toString(),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12,
+                        color: Color(0xFF2F6E54),
+                      ),
+                    ),
+                    SizedBox(width: layout.qtySpacing),
+                    _QtyIcon(
+                      icon: Icons.add,
+                      onTap: onIncrement,
+                      size: layout.qtyIconSize,
+                      iconSize: layout.qtyIconInnerSize,
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
         ),
+
         SizedBox(
-          width: 56,
+          width: layout.priceWidth,
           child: Align(
             alignment: Alignment.centerRight,
-            child: Text(
-              item.price,
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerRight,
+              child: Text(
+                'NT\$${item.item.price * item.qty}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
             ),
           ),
         ),
@@ -705,24 +1011,59 @@ class CheckoutItemRow extends StatelessWidget {
 }
 
 class _QtyIcon extends StatelessWidget {
-  const _QtyIcon({required this.icon});
+  const _QtyIcon({
+    required this.icon,
+    required this.onTap,
+    required this.size,
+    required this.iconSize,
+  });
 
   final IconData icon;
+  final VoidCallback onTap;
+  final double size;
+  final double iconSize;
 
   @override
   Widget build(BuildContext context) {
     const accent = Color(0xFF27DD8E);
 
-    return Container(
-      width: 18,
-      height: 18,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: accent),
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: accent),
+        ),
+        child: Icon(icon, size: iconSize, color: accent),
       ),
-      child: Icon(icon, size: 12, color: accent),
     );
   }
+}
+
+class _CheckoutLayout {
+  const _CheckoutLayout({
+    required this.leadingWidth,
+    required this.iconSize,
+    required this.gapWidth,
+    required this.qtyWidth,
+    required this.priceWidth,
+    required this.qtyPadding,
+    required this.qtySpacing,
+    required this.qtyIconSize,
+    required this.qtyIconInnerSize,
+  });
+
+  final double leadingWidth;
+  final double iconSize;
+  final double gapWidth;
+  final double qtyWidth;
+  final double priceWidth;
+  final double qtyPadding;
+  final double qtySpacing;
+  final double qtyIconSize;
+  final double qtyIconInnerSize;
 }
 
 class _SummaryRow extends StatelessWidget {
@@ -751,26 +1092,29 @@ class _SummaryRow extends StatelessWidget {
   }
 }
 
-class _CheckoutItem {
-  const _CheckoutItem({
-    required this.name,
-    required this.qty,
-    required this.price,
-  });
+class _CartEntry {
+  const _CartEntry({required this.item, required this.qty});
 
-  final String name;
+  final StockItem item;
   final int qty;
-  final String price;
+
+  _CartEntry copyWith({StockItem? item, int? qty}) {
+    return _CartEntry(item: item ?? this.item, qty: qty ?? this.qty);
+  }
 }
 
-class _CategoryData {
-  const _CategoryData({
+class _CategoryOption {
+  const _CategoryOption({
     required this.label,
     required this.icon,
-    this.isSelected = false,
+    this.matchTypes = const [],
+    this.isAll = false,
+    this.isOthers = false,
   });
 
   final String label;
   final IconData icon;
-  final bool isSelected;
+  final List<String> matchTypes;
+  final bool isAll;
+  final bool isOthers;
 }
