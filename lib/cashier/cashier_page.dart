@@ -97,14 +97,14 @@ class _CashierPageState extends State<CashierPage> {
                       padding: const EdgeInsets.all(16),
                       child: Column(
                         children: [
-                        CatalogPanel(
-                          isNarrow: isNarrow,
-                          items: catalogItems,
-                          isLoading: _isLoading,
-                          errorText: _errorText,
-                          searchController: _searchController,
-                          onSearchChanged: _updateSearch,
-                        ),
+                          CatalogPanel(
+                            isNarrow: isNarrow,
+                            items: catalogItems,
+                            isLoading: _isLoading,
+                            errorText: _errorText,
+                            searchController: _searchController,
+                            onSearchChanged: _updateSearch,
+                          ),
                           const SizedBox(height: 16),
                           CheckoutPanel(
                             isNarrow: isNarrow,
@@ -121,14 +121,14 @@ class _CashierPageState extends State<CashierPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
-                        child: CatalogPanel(
-                          isNarrow: isNarrow,
-                          items: catalogItems,
-                          isLoading: _isLoading,
-                          errorText: _errorText,
-                          searchController: _searchController,
-                          onSearchChanged: _updateSearch,
-                        ),
+                          child: CatalogPanel(
+                            isNarrow: isNarrow,
+                            items: catalogItems,
+                            isLoading: _isLoading,
+                            errorText: _errorText,
+                            searchController: _searchController,
+                            onSearchChanged: _updateSearch,
+                          ),
                         ),
                         const SizedBox(width: 16),
                         SizedBox(
@@ -246,13 +246,15 @@ class CatalogPanel extends StatelessWidget {
       itemBuilder: (context, index) => CatalogItemCard(item: items[index]),
     );
 
-    final gridBody = items.isEmpty
-        ? _CatalogPlaceholder(
-            message: isLoading
-                ? 'Loading items...'
-                : (errorText ?? 'No items found.'),
-          )
-        : grid;
+    final gridBody =
+        items.isEmpty
+            ? _CatalogPlaceholder(
+              message:
+                  isLoading
+                      ? 'Loading items...'
+                      : (errorText ?? 'No items found.'),
+            )
+            : grid;
 
     final gridContent = Column(
       children: [
@@ -465,21 +467,22 @@ class CatalogItemCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Center(
-                child: imageBytes == null
-                    ? const Icon(
-                        Icons.image_outlined,
-                        color: Color(0xFF9E9E9E),
-                        size: 32,
-                      )
-                    : ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.memory(
-                          imageBytes,
-                          fit: BoxFit.cover,
-                          width: double.infinity,
-                          height: double.infinity,
+                child:
+                    imageBytes == null
+                        ? const Icon(
+                          Icons.image_outlined,
+                          color: Color(0xFF9E9E9E),
+                          size: 32,
+                        )
+                        : ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.memory(
+                            imageBytes,
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                            height: double.infinity,
+                          ),
                         ),
-                      ),
               ),
             ),
           ),

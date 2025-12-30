@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -244,8 +245,8 @@ class _StockPageState extends State<StockPage> {
                                     )
                                   : ClipRRect(
                                       borderRadius: BorderRadius.circular(12),
-                                      child: Image.network(
-                                        selectedImage!.path,
+                                      child: Image.file(
+                                        File(selectedImage!.path),
                                         fit: BoxFit.cover,
                                         errorBuilder: (_, __, ___) {
                                           return const Center(
