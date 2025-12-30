@@ -420,23 +420,19 @@ class _SalesRevenueCard extends StatelessWidget {
       'Dec',
     ];
 
-    final maxValue = [...revenue, ...sales].fold<int>(0, math.max).toDouble();
+    final maxValue = revenue.fold<int>(0, math.max).toDouble();
     final interval = maxValue == 0 ? 1.0 : maxValue / 4;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
-          'Sales & Revenue',
+          'Revenue',
           style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
         ),
         const SizedBox(height: 12),
-        Row(
-          children: const [
-            _LegendDot(color: Color(0xFF1AC978), label: 'Revenue'),
-            SizedBox(width: 12),
-            _LegendDot(color: Color(0xFF8FF0BF), label: 'Sales'),
-          ],
+        const Row(
+          children: [_LegendDot(color: Color(0xFF1AC978), label: 'Revenue')],
         ),
         const SizedBox(height: 12),
         Expanded(
@@ -501,12 +497,6 @@ class _SalesRevenueCard extends StatelessWidget {
                     BarChartRodData(
                       toY: revenue[index].toDouble(),
                       color: const Color(0xFF1AC978),
-                      width: 7,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    BarChartRodData(
-                      toY: sales[index].toDouble(),
-                      color: const Color(0xFF8FF0BF),
                       width: 7,
                       borderRadius: BorderRadius.circular(4),
                     ),
