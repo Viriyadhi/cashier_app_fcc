@@ -15,4 +15,11 @@ class AuthService {
     );
     return response.data.toString();
   }
+
+  Future<void> logout() async {
+    final response = await _dio.get('/db/login_page/log_out');
+    if (response.data.toString() == 'err from sql') {
+      throw Exception('Server returned error');
+    }
+  }
 }

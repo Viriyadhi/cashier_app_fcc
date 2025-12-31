@@ -14,7 +14,8 @@ class _HistoryPageState extends State<HistoryPage> {
   bool _isLoading = false;
   String? _errorText;
   List<TransactionGroup> _groups = [];
-  int _selectedIndex = -1;
+  String _searchQuery = '';
+  String? _selectedGroupKey;
 
   @override
   void initState() {
@@ -41,7 +42,9 @@ class _HistoryPageState extends State<HistoryPage> {
 
       setState(() {
         _groups = groups;
-        _selectedIndex = _groups.isNotEmpty ? 0 : -1;
+        final filtered = _filterGroups(_groups, _searchQuery);
+        _selectedGroupKey =
+            filtered.isNotEmpty ? filtered.first.time.toIso8601String() : null;
       });
     } catch (error) {
       setState(() {
@@ -56,6 +59,27 @@ class _HistoryPageState extends State<HistoryPage> {
     }
   }
 
+  void _updateSearch(String value) {
+    setState(() {
+      _searchQuery = value;
+      final filtered = _filterGroups(_groups, _searchQuery);
+      _selectedGroupKey =
+          filtered.isNotEmpty ? filtered.first.time.toIso8601String() : null;
+    });
+  }
+
+  List<TransactionGroup> _filterGroups(
+    List<TransactionGroup> groups,
+    String query,
+  ) {
+    final needle = query.trim().toLowerCase();
+    if (needle.isEmpty) return groups;
+    return groups.where((group) {
+      final date = _formatDate(group.time).toLowerCase();
+      return date.contains(needle);
+    }).toList();
+  }
+
   List<TransactionGroup> _groupByTime(List<TransactionRecord> records) {
     final Map<String, List<TransactionRecord>> grouped = {};
     for (final record in records) {
@@ -68,11 +92,16 @@ class _HistoryPageState extends State<HistoryPage> {
           final time = DateTime.parse(entry.key);
           final items = entry.value;
           final totalCount = items.fold<int>(0, (sum, r) => sum + r.count);
+          final totalAmount = items.fold<int>(
+            0,
+            (sum, r) => sum + (r.price * r.count),
+          );
           final rank = items.isNotEmpty ? items.first.rank : 0;
           return TransactionGroup(
             time: time,
             records: items,
             totalCount: totalCount,
+            totalAmount: totalAmount,
             rank: rank,
           );
         }).toList();
@@ -82,8 +111,13 @@ class _HistoryPageState extends State<HistoryPage> {
   }
 
   TransactionGroup? get _selectedGroup {
-    if (_selectedIndex < 0 || _selectedIndex >= _groups.length) return null;
-    return _groups[_selectedIndex];
+    final filtered = _filterGroups(_groups, _searchQuery);
+    if (filtered.isEmpty) return null;
+    if (_selectedGroupKey == null) return filtered.first;
+    return filtered.firstWhere(
+      (group) => group.time.toIso8601String() == _selectedGroupKey,
+      orElse: () => filtered.first,
+    );
   }
 
   String _formatDate(DateTime time) {
@@ -158,9 +192,10 @@ class _HistoryPageState extends State<HistoryPage> {
                             height: 42,
                             child: TextField(
                               controller: _searchController,
+                              onChanged: _updateSearch,
                               decoration: const InputDecoration(
                                 prefixIcon: Icon(Icons.search),
-                                hintText: 'search items here',
+                                hintText: 'YYYY‑MM‑DD',
                                 filled: true,
                                 fillColor: Color(0xFFF0F0F0),
                                 contentPadding: EdgeInsets.symmetric(
@@ -195,6 +230,16 @@ class _HistoryPageState extends State<HistoryPage> {
                               flex: 3,
                               child: Text(
                                 'ID',
+                                style: TextStyle(
+                                  color: Colors.grey,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            Expanded(
+                              flex: 3,
+                              child: Text(
+                                'Date',
                                 style: TextStyle(
                                   color: Colors.grey,
                                   fontWeight: FontWeight.w600,
@@ -316,37 +361,6 @@ class _HistoryPageState extends State<HistoryPage> {
                           const Divider(height: 1),
 
                           // Summary section
-                          Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Column(
-                              children: [
-                                _SummaryRow(
-                                  label: 'Rank',
-                                  value:
-                                      selectedGroup == null
-                                          ? '-'
-                                          : '#${selectedGroup.rank}',
-                                ),
-                                const SizedBox(height: 10),
-                                _SummaryRow(
-                                  label: 'Items',
-                                  value:
-                                      selectedGroup == null
-                                          ? '-'
-                                          : '${selectedGroup.totalCount}',
-                                ),
-                                const SizedBox(height: 10),
-                                _SummaryRow(
-                                  label: 'Lines',
-                                  value:
-                                      selectedGroup == null
-                                          ? '-'
-                                          : '${selectedGroup.records.length}',
-                                ),
-                              ],
-                            ),
-                          ),
-
                           const Divider(height: 1),
 
                           // Total
@@ -368,7 +382,7 @@ class _HistoryPageState extends State<HistoryPage> {
                                 Text(
                                   selectedGroup == null
                                       ? '-'
-                                      : '${selectedGroup.totalCount} items',
+                                      : 'NT\$${selectedGroup.totalAmount}',
                                   style: const TextStyle(
                                     fontWeight: FontWeight.w800,
                                     fontSize: 16,
@@ -431,21 +445,22 @@ class _HistoryPageState extends State<HistoryPage> {
       );
     }
 
-    if (_groups.isEmpty) {
+    final filteredGroups = _filterGroups(_groups, _searchQuery);
+    if (filteredGroups.isEmpty) {
       return const Center(child: Text('No transactions found.'));
     }
 
     return ListView.separated(
-      itemCount: _groups.length,
+      itemCount: filteredGroups.length,
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (context, index) {
-        final group = _groups[index];
-        final selected = index == _selectedIndex;
+        final group = filteredGroups[index];
+        final selected = group.time.toIso8601String() == _selectedGroupKey;
 
         return InkWell(
           onTap: () {
             setState(() {
-              _selectedIndex = index;
+              _selectedGroupKey = group.time.toIso8601String();
             });
           },
           child: Container(
@@ -458,6 +473,7 @@ class _HistoryPageState extends State<HistoryPage> {
             child: Row(
               children: [
                 Expanded(flex: 3, child: Text('TXN ${index + 1}')),
+                Expanded(flex: 3, child: Text(_formatDate(group.time))),
                 Expanded(flex: 2, child: Text(_formatTime(group.time))),
                 Expanded(flex: 2, child: Text('${group.totalCount}')),
               ],
@@ -482,10 +498,13 @@ class _HistoryPageState extends State<HistoryPage> {
       separatorBuilder: (_, __) => const Divider(height: 1),
       itemBuilder: (context, index) {
         final record = group.records[index];
+        final name =
+            record.name.isNotEmpty ? record.name : 'Item #${record.itemId}';
+        final price = record.price > 0 ? 'NT\$${record.price}' : '-';
         return _ContentRow(
-          name: 'Item #${record.itemId}',
+          name: name,
           qty: record.count.toString(),
-          price: '-',
+          price: price,
         );
       },
     );
@@ -497,12 +516,14 @@ class TransactionGroup {
     required this.time,
     required this.records,
     required this.totalCount,
+    required this.totalAmount,
     required this.rank,
   });
 
   final DateTime time;
   final List<TransactionRecord> records;
   final int totalCount;
+  final int totalAmount;
   final int rank;
 }
 

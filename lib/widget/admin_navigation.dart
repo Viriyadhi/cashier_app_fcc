@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:cashier_app/admin/history_page.dart';
 import 'package:cashier_app/admin/stock_page.dart';
 import 'package:cashier_app/admin/summary_page.dart';
+import 'package:cashier_app/api/auth_service.dart';
+import 'package:cashier_app/login_page.dart';
 
 class AdminNavigation extends StatefulWidget {
   const AdminNavigation({super.key});
@@ -12,6 +16,7 @@ class AdminNavigation extends StatefulWidget {
 
 class _AdminNavigationState extends State<AdminNavigation> {
   int selectedIndex = 0;
+  bool _isLoggingOut = false;
 
   static const List<Widget> _pages = <Widget>[
     StockPage(),
@@ -25,7 +30,28 @@ class _AdminNavigationState extends State<AdminNavigation> {
     });
   }
 
-  void onLogout() {}
+  Future<void> onLogout() async {
+    if (_isLoggingOut) return;
+    setState(() {
+      _isLoggingOut = true;
+    });
+
+    try {
+      await AuthService.instance.logout();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Logout failed. Please try again.')),
+      );
+    }
+
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+      (_) => false,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -74,12 +100,20 @@ class AdminNavBar extends StatelessWidget {
               children: [
                 // LEFT
                 Row(
-                  children: const [
-                    Icon(Icons.storefront, color: Colors.white, size: 26),
-                    SizedBox(width: 10),
+                  children: [
+                    SvgPicture.asset(
+                      'assets/Logo.svg',
+                      width: 26,
+                      height: 26,
+                      colorFilter: const ColorFilter.mode(
+                        Color(0xFFFFC107),
+                        BlendMode.srcIn,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
                     Text(
                       "ASEP'S POS",
-                      style: TextStyle(
+                      style: GoogleFonts.aclonica(
                         color: Colors.white,
                         fontSize: 20,
                         fontWeight: FontWeight.w700,

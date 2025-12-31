@@ -6,20 +6,26 @@ class TransactionRecord {
   TransactionRecord({
     required this.time,
     required this.itemId,
+    required this.name,
     required this.count,
+    required this.price,
     required this.rank,
   });
 
   final DateTime time;
   final int itemId;
+  final String name;
   final int count;
+  final int price;
   final int rank;
 
   factory TransactionRecord.fromJson(Map<String, dynamic> json) {
     return TransactionRecord(
       time: DateTime.parse(json['time']?.toString() ?? ''),
       itemId: _toInt(json['item_id']),
+      name: json['name']?.toString() ?? '',
       count: _toInt(json['count']),
+      price: _toInt(json['price']),
       rank: _toInt(json['rank']),
     );
   }
