@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cashier_app/api/stock_service.dart';
 
@@ -15,6 +15,12 @@ class StockPage extends StatefulWidget {
 class _StockPageState extends State<StockPage> {
   final Color _accent = const Color(0xFF00D084);
   final Color _mintBg = const Color(0xFFE8FFF6);
+  static const List<String> _categories = [
+    'food',
+    'snack',
+    'beverages',
+    'other',
+  ];
 
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _nameController = TextEditingController();
@@ -23,8 +29,11 @@ class _StockPageState extends State<StockPage> {
   int _selectedIndex = -1;
   int _stockValue = 0;
   String _imageLabel = 'No image selected';
+  String? _selectedImagePath;
+  String _selectedCategory = _categories.first;
 
   bool _isLoading = false;
+  bool _isSaving = false;
   String? _errorText;
   List<StockItem> _items = [];
 
@@ -42,7 +51,7 @@ class _StockPageState extends State<StockPage> {
     super.dispose();
   }
 
-  Future<void> _fetchItems() async {
+  Future<void> _fetchItems({int? selectedItemId}) async {
     setState(() {
       _isLoading = true;
       _errorText = null;
@@ -53,14 +62,20 @@ class _StockPageState extends State<StockPage> {
       setState(() {
         _items = items;
         if (_items.isNotEmpty) {
-          _selectedIndex = 0;
-          _loadSelectedItem(0);
+          final index =
+              selectedItemId == null
+                  ? 0
+                  : _items.indexWhere((item) => item.id == selectedItemId);
+          _selectedIndex = index >= 0 ? index : 0;
+          _loadSelectedItem(_selectedIndex);
         } else {
           _selectedIndex = -1;
           _nameController.clear();
           _priceController.clear();
           _stockValue = 0;
           _imageLabel = 'No image selected';
+          _selectedImagePath = null;
+          _selectedCategory = _categories.first;
         }
       });
     } catch (error) {
@@ -81,10 +96,13 @@ class _StockPageState extends State<StockPage> {
     final item = _items[index];
     _nameController.text = item.name;
     _priceController.text = item.price.toString();
-    _stockValue = item.currentStock;
-    _imageLabel = item.imageBase64.isNotEmpty
-        ? 'image_${item.id}.png'
-        : 'No image selected';
+    _stockValue = item.currentStock < 0 ? 0 : item.currentStock;
+    _selectedCategory = _normalizeCategory(item.type);
+    _imageLabel =
+        item.imageBase64.isNotEmpty
+            ? 'image_${item.id}.png'
+            : 'No image selected';
+    _selectedImagePath = null;
   }
 
   void _selectItem(int index) {
@@ -101,6 +119,8 @@ class _StockPageState extends State<StockPage> {
       _priceController.clear();
       _stockValue = 0;
       _imageLabel = 'No image selected';
+      _selectedImagePath = null;
+      _selectedCategory = _categories.first;
     });
   }
 
@@ -120,13 +140,166 @@ class _StockPageState extends State<StockPage> {
     }
   }
 
+  String _normalizeCategory(String? type) {
+    final value = type?.toLowerCase().trim() ?? '';
+    if (value == 'food' || value == 'foods') return 'food';
+    if (value == 'snack' || value == 'snacks') return 'snack';
+    if (value == 'beverage' ||
+        value == 'beverages' ||
+        value == 'drink' ||
+        value == 'drinks' ||
+        value == 'drnk') {
+      return 'beverages';
+    }
+    if (value == 'other' || value == 'others' || value.isEmpty) {
+      return 'other';
+    }
+    return 'other';
+  }
+
+  List<StockItem> get _filteredItems {
+    final query = _searchController.text.trim().toLowerCase();
+    if (query.isEmpty) return _items;
+    return _items
+        .where((item) => item.name.toLowerCase().contains(query))
+        .toList();
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _pickUpdateImage() async {
+    if (_selectedIndex < 0 || _selectedIndex >= _items.length) {
+      _showSnackBar('Select an item first.');
+      return;
+    }
+    final picker = ImagePicker();
+    final file = await picker.pickImage(source: ImageSource.gallery);
+    if (file == null) return;
+    setState(() {
+      _selectedImagePath = file.path;
+      _imageLabel = file.name;
+    });
+  }
+
+  Future<void> _saveItemChanges() async {
+    if (_selectedIndex < 0 || _selectedIndex >= _items.length) {
+      _showSnackBar('Select an item to update.');
+      return;
+    }
+
+    final name = _nameController.text.trim();
+    final price = int.tryParse(_priceController.text.trim());
+
+    if (name.isEmpty || price == null) {
+      _showSnackBar('Please enter a valid name and price.');
+      return;
+    }
+
+    if (_stockValue < 0) {
+      _showSnackBar('Stock must be 0 or more.');
+      return;
+    }
+
+    final itemId = _items[_selectedIndex].id;
+
+    setState(() {
+      _isSaving = true;
+    });
+
+    try {
+      await StockService.instance.updateItem(
+        itemId: itemId,
+        name: name,
+        stock: _stockValue,
+        price: price,
+        imagePath: _selectedImagePath,
+        type: _selectedCategory,
+      );
+      if (!mounted) return;
+      _selectedImagePath = null;
+      await _fetchItems(selectedItemId: itemId);
+      if (!mounted) return;
+      _showSnackBar('Item updated.');
+    } catch (_) {
+      if (!mounted) return;
+      _showSnackBar('Failed to update item.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _deleteSelectedItem() async {
+    if (_selectedIndex < 0 || _selectedIndex >= _items.length) {
+      _showSnackBar('Select an item to delete.');
+      return;
+    }
+
+    final item = _items[_selectedIndex];
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Delete Item'),
+          content: Text('Delete "${item.name}"? This cannot be undone.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFF2D2D),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+
+    setState(() {
+      _isSaving = true;
+    });
+
+    try {
+      await StockService.instance.deleteItems([item.id]);
+      if (!mounted) return;
+      _resetSelection();
+      await _fetchItems();
+      if (!mounted) return;
+      _showSnackBar('Item deleted.');
+    } catch (_) {
+      if (!mounted) return;
+      _showSnackBar('Failed to delete item.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
+  }
+
   Future<void> _openAddItemDialog() async {
     final nameController = TextEditingController();
     final priceController = TextEditingController();
-    final stockController = TextEditingController();
+    final stockController = TextEditingController(text: '1');
     XFile? selectedImage;
     bool isSaving = false;
     String? dialogError;
+    String selectedCategory = _categories.first;
 
     final picker = ImagePicker();
 
@@ -150,9 +323,16 @@ class _StockPageState extends State<StockPage> {
               final price = int.tryParse(priceController.text.trim());
               final stock = int.tryParse(stockController.text.trim());
 
-              if (name.isEmpty || price == null || stock == null) {
+              if (name.isEmpty || price == null || stock == null || stock < 0) {
                 setDialogState(() {
                   dialogError = 'Please enter valid name, price, and stock.';
+                });
+                return;
+              }
+
+              if (selectedImage == null) {
+                setDialogState(() {
+                  dialogError = 'Please add an image.';
                 });
                 return;
               }
@@ -168,6 +348,7 @@ class _StockPageState extends State<StockPage> {
                   stock: stock,
                   price: price,
                   imagePath: selectedImage?.path,
+                  type: selectedCategory,
                 );
                 if (!mounted) return;
                 Navigator.pop(context);
@@ -218,47 +399,50 @@ class _StockPageState extends State<StockPage> {
                             onTap: pickImage,
                             borderRadius: BorderRadius.circular(12),
                             child: Container(
+                              margin: EdgeInsets.only(top: 32),
                               width: 170,
                               height: 170,
                               decoration: BoxDecoration(
                                 color: const Color(0xFF0C6B45),
                                 borderRadius: BorderRadius.circular(12),
                               ),
-                              child: selectedImage == null
-                                  ? Column(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: const [
-                                        Icon(
-                                          Icons.add_photo_alternate,
-                                          color: Colors.white,
-                                          size: 42,
-                                        ),
-                                        SizedBox(height: 10),
-                                        Text(
-                                          'Add Image',
-                                          style: TextStyle(
+                              child:
+                                  selectedImage == null
+                                      ? Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        children: const [
+                                          Icon(
+                                            Icons.add_photo_alternate,
                                             color: Colors.white,
-                                            fontWeight: FontWeight.w600,
+                                            size: 42,
                                           ),
-                                        ),
-                                      ],
-                                    )
-                                  : ClipRRect(
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: Image.file(
-                                        File(selectedImage!.path),
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (_, __, ___) {
-                                          return const Center(
-                                            child: Icon(
-                                              Icons.image,
+                                          SizedBox(height: 10),
+                                          Text(
+                                            'Add Image',
+                                            style: TextStyle(
                                               color: Colors.white,
-                                              size: 40,
+                                              fontWeight: FontWeight.w600,
                                             ),
-                                          );
-                                        },
+                                          ),
+                                        ],
+                                      )
+                                      : ClipRRect(
+                                        borderRadius: BorderRadius.circular(12),
+                                        child: Image.file(
+                                          File(selectedImage!.path),
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (_, __, ___) {
+                                            return const Center(
+                                              child: Icon(
+                                                Icons.image,
+                                                color: Colors.white,
+                                                size: 40,
+                                              ),
+                                            );
+                                          },
+                                        ),
                                       ),
-                                    ),
                             ),
                           ),
                           const SizedBox(width: 20),
@@ -268,6 +452,41 @@ class _StockPageState extends State<StockPage> {
                                 _dialogField(
                                   controller: nameController,
                                   hintText: 'Item Name',
+                                ),
+                                const SizedBox(height: 12),
+                                DropdownButtonFormField<String>(
+                                  value: selectedCategory,
+                                  decoration: InputDecoration(
+                                    hintText: 'Category',
+                                    filled: true,
+                                    fillColor: const Color(0xFFF3F8F6),
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 12,
+                                    ),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                      borderSide: BorderSide.none,
+                                    ),
+                                  ),
+                                  items:
+                                      _categories
+                                          .map(
+                                            (value) => DropdownMenuItem(
+                                              value: value,
+                                              child: Text(
+                                                value[0].toUpperCase() +
+                                                    value.substring(1),
+                                              ),
+                                            ),
+                                          )
+                                          .toList(),
+                                  onChanged: (value) {
+                                    if (value == null) return;
+                                    setDialogState(() {
+                                      selectedCategory = value;
+                                    });
+                                  },
                                 ),
                                 const SizedBox(height: 12),
                                 _dialogField(
@@ -280,6 +499,9 @@ class _StockPageState extends State<StockPage> {
                                   controller: stockController,
                                   hintText: 'Stock',
                                   keyboardType: TextInputType.number,
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.digitsOnly,
+                                  ],
                                 ),
                               ],
                             ),
@@ -299,7 +521,8 @@ class _StockPageState extends State<StockPage> {
                         mainAxisAlignment: MainAxisAlignment.end,
                         children: [
                           OutlinedButton(
-                            onPressed: isSaving ? null : () => Navigator.pop(context),
+                            onPressed:
+                                isSaving ? null : () => Navigator.pop(context),
                             style: OutlinedButton.styleFrom(
                               foregroundColor: const Color(0xFF0C6B45),
                               side: const BorderSide(color: Color(0xFF0C6B45)),
@@ -322,17 +545,19 @@ class _StockPageState extends State<StockPage> {
                                 vertical: 12,
                               ),
                             ),
-                            child: isSaving
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      valueColor:
-                                          AlwaysStoppedAnimation(Colors.white),
-                                    ),
-                                  )
-                                : const Text('Save'),
+                            child:
+                                isSaving
+                                    ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        valueColor: AlwaysStoppedAnimation(
+                                          Colors.white,
+                                        ),
+                                      ),
+                                    )
+                                    : const Text('Save'),
                           ),
                         ],
                       ),
@@ -351,15 +576,20 @@ class _StockPageState extends State<StockPage> {
     required TextEditingController controller,
     required String hintText,
     TextInputType? keyboardType,
+    List<TextInputFormatter>? inputFormatters,
   }) {
     return TextField(
       controller: controller,
       keyboardType: keyboardType,
+      inputFormatters: inputFormatters,
       decoration: InputDecoration(
         hintText: hintText,
         filled: true,
         fillColor: const Color(0xFFF3F8F6),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 12,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide.none,
@@ -380,10 +610,7 @@ class _StockPageState extends State<StockPage> {
           children: [
             Text(_errorText!),
             const SizedBox(height: 12),
-            OutlinedButton(
-              onPressed: _fetchItems,
-              child: const Text('Retry'),
-            ),
+            OutlinedButton(onPressed: _fetchItems, child: const Text('Retry')),
           ],
         ),
       );
@@ -393,9 +620,18 @@ class _StockPageState extends State<StockPage> {
       return const Center(child: Text('No items found.'));
     }
 
+    final filteredItems = _filteredItems;
+    if (filteredItems.isEmpty) {
+      return const Center(child: Text('No matching items.'));
+    }
+
     return LayoutBuilder(
       builder: (context, c) {
         final count = _calcCrossAxisCount(c.maxWidth);
+        final selectedId =
+            (_selectedIndex >= 0 && _selectedIndex < _items.length)
+                ? _items[_selectedIndex].id
+                : null;
         return GridView.builder(
           padding: const EdgeInsets.only(bottom: 8),
           gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
@@ -404,15 +640,22 @@ class _StockPageState extends State<StockPage> {
             mainAxisSpacing: 16,
             childAspectRatio: 0.78,
           ),
-          itemCount: _items.length,
+          itemCount: filteredItems.length,
           itemBuilder: (context, index) {
-            final item = _items[index];
-            final selected = index == _selectedIndex;
+            final item = filteredItems[index];
+            final selected = selectedId == item.id;
             final imageBytes = _decodeImage(item.imageBase64);
+            final originalIndex = _items.indexWhere(
+              (entry) => entry.id == item.id,
+            );
 
             return InkWell(
               borderRadius: BorderRadius.circular(12),
-              onTap: () => _selectItem(index),
+              onTap: () {
+                if (originalIndex != -1) {
+                  _selectItem(originalIndex);
+                }
+              },
               child: Container(
                 decoration: BoxDecoration(
                   color: Colors.white,
@@ -439,15 +682,16 @@ class _StockPageState extends State<StockPage> {
                         borderRadius: BorderRadius.circular(10),
                         child: AspectRatio(
                           aspectRatio: 1,
-                          child: imageBytes != null
-                              ? Image.memory(imageBytes, fit: BoxFit.cover)
-                              : Container(
-                                  color: const Color(0xFFEDEDED),
-                                  child: const Icon(
-                                    Icons.image_not_supported,
-                                    size: 36,
+                          child:
+                              imageBytes != null
+                                  ? Image.memory(imageBytes, fit: BoxFit.cover)
+                                  : Container(
+                                    color: const Color(0xFFEDEDED),
+                                    child: const Icon(
+                                      Icons.image_not_supported,
+                                      size: 36,
+                                    ),
                                   ),
-                                ),
                         ),
                       ),
                     ),
@@ -469,11 +713,8 @@ class _StockPageState extends State<StockPage> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      'Stock : ${item.currentStock}',
-                      style: const TextStyle(
-                        color: Colors.grey,
-                        fontSize: 12,
-                      ),
+                      'Stock : ${item.currentStock < 0 ? 0 : item.currentStock}',
+                      style: const TextStyle(color: Colors.grey, fontSize: 12),
                     ),
                   ],
                 ),
@@ -520,6 +761,7 @@ class _StockPageState extends State<StockPage> {
                             height: 42,
                             child: TextField(
                               controller: _searchController,
+                              onChanged: (_) => setState(() {}),
                               decoration: InputDecoration(
                                 prefixIcon: const Icon(Icons.search),
                                 hintText: 'search items here',
@@ -576,6 +818,42 @@ class _StockPageState extends State<StockPage> {
                             _field(_nameController, hint: 'Item name'),
                             const SizedBox(height: 12),
 
+                            _label('Category'),
+                            DropdownButtonFormField<String>(
+                              value: _selectedCategory,
+                              decoration: InputDecoration(
+                                filled: true,
+                                fillColor: const Color(0xFFF3F3F3),
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 12,
+                                ),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(6),
+                                  borderSide: BorderSide.none,
+                                ),
+                              ),
+                              items:
+                                  _categories
+                                      .map(
+                                        (value) => DropdownMenuItem(
+                                          value: value,
+                                          child: Text(
+                                            value[0].toUpperCase() +
+                                                value.substring(1),
+                                          ),
+                                        ),
+                                      )
+                                      .toList(),
+                              onChanged: (value) {
+                                if (value == null) return;
+                                setState(() {
+                                  _selectedCategory = value;
+                                });
+                              },
+                            ),
+                            const SizedBox(height: 12),
+
                             _label('Price'),
                             _field(_priceController, hint: 'NT\$0'),
                             const SizedBox(height: 12),
@@ -585,9 +863,10 @@ class _StockPageState extends State<StockPage> {
                               children: [
                                 _stepButton(
                                   icon: Icons.remove,
-                                  onTap: () => setState(() {
-                                    if (_stockValue > 0) _stockValue--;
-                                  }),
+                                  onTap:
+                                      () => setState(() {
+                                        if (_stockValue > 0) _stockValue--;
+                                      }),
                                 ),
                                 const SizedBox(width: 10),
                                 Container(
@@ -611,9 +890,10 @@ class _StockPageState extends State<StockPage> {
                                 const SizedBox(width: 10),
                                 _stepButton(
                                   icon: Icons.add,
-                                  onTap: () => setState(() {
-                                    _stockValue++;
-                                  }),
+                                  onTap:
+                                      () => setState(() {
+                                        _stockValue++;
+                                      }),
                                 ),
                               ],
                             ),
@@ -623,11 +903,7 @@ class _StockPageState extends State<StockPage> {
                             Row(
                               children: [
                                 OutlinedButton(
-                                  onPressed: () {
-                                    setState(() {
-                                      _imageLabel = 'sample_image.jpg';
-                                    });
-                                  },
+                                  onPressed: _pickUpdateImage,
                                   child: const Text('Upload Image'),
                                 ),
                                 const SizedBox(width: 10),
@@ -654,7 +930,7 @@ class _StockPageState extends State<StockPage> {
                       width: double.infinity,
                       height: 52,
                       child: ElevatedButton(
-                        onPressed: () {},
+                        onPressed: _isSaving ? null : _saveItemChanges,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _accent,
                           foregroundColor: Colors.black87,
@@ -663,8 +939,39 @@ class _StockPageState extends State<StockPage> {
                             borderRadius: BorderRadius.circular(10),
                           ),
                         ),
+                        child:
+                            _isSaving
+                                ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation(
+                                      Colors.white,
+                                    ),
+                                  ),
+                                )
+                                : const Text(
+                                  'Save',
+                                  style: TextStyle(fontWeight: FontWeight.w700),
+                                ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: OutlinedButton(
+                        onPressed: _isSaving ? null : _deleteSelectedItem,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFFFF2D2D),
+                          side: const BorderSide(color: Color(0xFFFF2D2D)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
                         child: const Text(
-                          'Save',
+                          'Delete',
                           style: TextStyle(fontWeight: FontWeight.w700),
                         ),
                       ),

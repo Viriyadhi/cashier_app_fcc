@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cashier_app/api/history_service.dart';
+import 'package:cashier_app/api/transaction_service.dart' as txn_api;
 
 class HistoryPage extends StatefulWidget {
   const HistoryPage({super.key});
@@ -12,10 +13,13 @@ class _HistoryPageState extends State<HistoryPage> {
   final TextEditingController _searchController = TextEditingController();
 
   bool _isLoading = false;
+  bool _isReturning = false;
+  bool _isReturnMode = false;
   String? _errorText;
   List<TransactionGroup> _groups = [];
   String _searchQuery = '';
   String? _selectedGroupKey;
+  final Map<int, int> _returnQuantities = {};
 
   @override
   void initState() {
@@ -33,6 +37,8 @@ class _HistoryPageState extends State<HistoryPage> {
     setState(() {
       _isLoading = true;
       _errorText = null;
+      _isReturnMode = false;
+      _returnQuantities.clear();
     });
 
     try {
@@ -45,6 +51,8 @@ class _HistoryPageState extends State<HistoryPage> {
         final filtered = _filterGroups(_groups, _searchQuery);
         _selectedGroupKey =
             filtered.isNotEmpty ? filtered.first.time.toIso8601String() : null;
+        _isReturnMode = false;
+        _returnQuantities.clear();
       });
     } catch (error) {
       setState(() {
@@ -65,6 +73,8 @@ class _HistoryPageState extends State<HistoryPage> {
       final filtered = _filterGroups(_groups, _searchQuery);
       _selectedGroupKey =
           filtered.isNotEmpty ? filtered.first.time.toIso8601String() : null;
+      _isReturnMode = false;
+      _returnQuantities.clear();
     });
   }
 
@@ -120,6 +130,115 @@ class _HistoryPageState extends State<HistoryPage> {
     );
   }
 
+  int _calculateReturnTotal(TransactionGroup group) {
+    var total = 0;
+    for (final record in group.records) {
+      final qty = _returnQuantities[record.itemId] ?? 0;
+      total += record.price * qty;
+    }
+    return total;
+  }
+
+  void _incrementReturnQty(TransactionRecord record) {
+    final current = _returnQuantities[record.itemId] ?? 0;
+    final maxQty = record.count.abs();
+    if (current >= maxQty) {
+      _showSnackBar('Cannot return more than purchased.');
+      return;
+    }
+    setState(() {
+      _returnQuantities[record.itemId] = current + 1;
+    });
+  }
+
+  void _decrementReturnQty(TransactionRecord record) {
+    final current = _returnQuantities[record.itemId] ?? 0;
+    if (current <= 0) return;
+    setState(() {
+      _returnQuantities[record.itemId] = current - 1;
+    });
+  }
+
+  Future<void> _handleReturnAction() async {
+    final group = _selectedGroup;
+    if (group == null || group.totalAmount < 0) return;
+
+    if (!_isReturnMode) {
+      setState(() {
+        _isReturnMode = true;
+        _returnQuantities
+          ..clear()
+          ..addEntries(group.records.map((r) => MapEntry(r.itemId, 0)));
+      });
+      return;
+    }
+
+    if (_isReturning) return;
+
+    final itemsToReturn = <String, int>{};
+    for (final record in group.records) {
+      final qty = _returnQuantities[record.itemId] ?? 0;
+      if (qty > 0) {
+        itemsToReturn[record.itemId.toString()] = -qty;
+      }
+    }
+
+    if (itemsToReturn.isEmpty) {
+      _showSnackBar('No items to return.');
+      return;
+    }
+
+    final returnTotal = _calculateReturnTotal(group);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Confirm return'),
+          content: Text(
+            'Return ${itemsToReturn.length} item(s) for NT\$$returnTotal?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Confirm'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+
+    setState(() {
+      _isReturning = true;
+    });
+
+    try {
+      await txn_api.TransactionService.instance.createTransaction(
+        itemsToReturn,
+      );
+      if (!mounted) return;
+      await _fetchHistory();
+      if (!mounted) return;
+      _showSnackBar('Return saved.');
+    } catch (_) {
+      if (!mounted) return;
+      _showSnackBar('Failed to save return.');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isReturning = false;
+          _isReturnMode = false;
+          _returnQuantities.clear();
+        });
+      }
+    }
+  }
+
   String _formatDate(DateTime time) {
     final y = time.year.toString().padLeft(4, '0');
     final m = time.month.toString().padLeft(2, '0');
@@ -141,6 +260,14 @@ class _HistoryPageState extends State<HistoryPage> {
     ];
 
     final selectedGroup = _selectedGroup;
+    final isReturnTransaction =
+        selectedGroup != null && selectedGroup.totalAmount < 0;
+    final displayTotal =
+        _isReturnMode && selectedGroup != null
+            ? _calculateReturnTotal(selectedGroup)
+            : (selectedGroup?.totalAmount ?? 0);
+    final contentTitle =
+        isReturnTransaction || _isReturnMode ? 'Returned Content' : 'Content';
 
     return Scaffold(
       backgroundColor: mintBg,
@@ -295,11 +422,12 @@ class _HistoryPageState extends State<HistoryPage> {
                       child: Column(
                         children: [
                           const SizedBox(height: 14),
-                          const Text(
-                            'Content',
-                            style: TextStyle(
+                          Text(
+                            contentTitle,
+                            style: const TextStyle(
                               fontWeight: FontWeight.w700,
                               fontSize: 16,
+                              color: Color(0xFF0C6B45),
                             ),
                           ),
                           const SizedBox(height: 12),
@@ -382,7 +510,7 @@ class _HistoryPageState extends State<HistoryPage> {
                                 Text(
                                   selectedGroup == null
                                       ? '-'
-                                      : 'NT\$${selectedGroup.totalAmount}',
+                                      : 'NT\$$displayTotal',
                                   style: const TextStyle(
                                     fontWeight: FontWeight.w800,
                                     fontSize: 16,
@@ -397,21 +525,41 @@ class _HistoryPageState extends State<HistoryPage> {
 
                     const SizedBox(height: 14),
 
-                    // Return Item button (UI only)
-                    Container(
+                    SizedBox(
                       width: double.infinity,
                       height: 52,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFF2D2D),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Text(
-                        'Return Item',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
+                      child: ElevatedButton(
+                        onPressed:
+                            selectedGroup == null || isReturnTransaction
+                                ? null
+                                : _handleReturnAction,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor:
+                              _isReturnMode
+                                  ? const Color(0xFF27DD8E)
+                                  : const Color(0xFFFF2D2D),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
                         ),
+                        child:
+                            _isReturning
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor:
+                                          AlwaysStoppedAnimation(Colors.white),
+                                    ),
+                                  )
+                                : Text(
+                                    _isReturnMode ? 'Save' : 'Return Item',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
                       ),
                     ),
                   ],
@@ -461,6 +609,8 @@ class _HistoryPageState extends State<HistoryPage> {
           onTap: () {
             setState(() {
               _selectedGroupKey = group.time.toIso8601String();
+              _isReturnMode = false;
+              _returnQuantities.clear();
             });
           },
           child: Container(
@@ -500,6 +650,18 @@ class _HistoryPageState extends State<HistoryPage> {
         final record = group.records[index];
         final name =
             record.name.isNotEmpty ? record.name : 'Item #${record.itemId}';
+        if (_isReturnMode) {
+          final qty = _returnQuantities[record.itemId] ?? 0;
+          return _ReturnRow(
+            name: name,
+            qty: qty,
+            maxQty: record.count.abs(),
+            price: record.price * qty,
+            onIncrement: () => _incrementReturnQty(record),
+            onDecrement: () => _decrementReturnQty(record),
+          );
+        }
+
         final price = record.price > 0 ? 'NT\$${record.price}' : '-';
         return _ContentRow(
           name: name,
@@ -507,6 +669,12 @@ class _HistoryPageState extends State<HistoryPage> {
           price: price,
         );
       },
+    );
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
     );
   }
 }
@@ -569,6 +737,104 @@ class _ContentRow extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ReturnRow extends StatelessWidget {
+  const _ReturnRow({
+    required this.name,
+    required this.qty,
+    required this.maxQty,
+    required this.price,
+    required this.onIncrement,
+    required this.onDecrement,
+  });
+
+  final String name;
+  final int qty;
+  final int maxQty;
+  final int price;
+  final VoidCallback onIncrement;
+  final VoidCallback onDecrement;
+
+  @override
+  Widget build(BuildContext context) {
+    final canDecrement = qty > 0;
+    final canIncrement = qty < maxQty;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 4,
+            child: Text(
+              name,
+              style: const TextStyle(fontSize: 12),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _QtyButton(
+                  icon: Icons.remove,
+                  enabled: canDecrement,
+                  onTap: canDecrement ? onDecrement : null,
+                ),
+                const SizedBox(width: 8),
+                Text('$qty', style: const TextStyle(fontSize: 12)),
+                const SizedBox(width: 8),
+                _QtyButton(
+                  icon: Icons.add,
+                  enabled: canIncrement,
+                  onTap: canIncrement ? onIncrement : null,
+                ),
+              ],
+            ),
+          ),
+          Expanded(
+            flex: 2,
+            child: Text(
+              'NT\$$price',
+              textAlign: TextAlign.right,
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QtyButton extends StatelessWidget {
+  const _QtyButton({
+    required this.icon,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final bool enabled;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = enabled ? const Color(0xFF27DD8E) : const Color(0xFFE0E0E0);
+    final fg = enabled ? Colors.white : Colors.white70;
+
+    return InkResponse(
+      onTap: onTap,
+      radius: 14,
+      child: Container(
+        width: 24,
+        height: 24,
+        decoration: BoxDecoration(color: bg, shape: BoxShape.circle),
+        child: Icon(icon, size: 14, color: fg),
       ),
     );
   }

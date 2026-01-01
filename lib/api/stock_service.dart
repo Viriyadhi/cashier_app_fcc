@@ -42,6 +42,22 @@ class StockService {
   static final StockService instance = StockService._();
   final Dio _dio = ApiClient.instance.dio;
 
+  bool _isActiveItem(Map<String, dynamic> json) {
+    final expiry = json['expiry'];
+    if (expiry == null) return true;
+    if (expiry is String && expiry.trim().isEmpty) return true;
+    return false;
+  }
+
+  List<StockItem> _mapItems(List<dynamic> data) {
+    return data
+        .whereType<Map>()
+        .map((e) => Map<String, dynamic>.from(e))
+        .where(_isActiveItem)
+        .map(StockItem.fromJson)
+        .toList();
+  }
+
   Future<List<StockItem>> fetchItemList() async {
     final response = await _dio.get('/db/stock_page/fetch_item_list');
     final data = response.data;
@@ -52,18 +68,12 @@ class StockService {
       }
       final decoded = jsonDecode(data);
       if (decoded is List) {
-        return decoded
-            .whereType<Map>()
-            .map((e) => StockItem.fromJson(Map<String, dynamic>.from(e)))
-            .toList();
+        return _mapItems(decoded);
       }
     }
 
     if (data is List) {
-      return data
-          .whereType<Map>()
-          .map((e) => StockItem.fromJson(Map<String, dynamic>.from(e)))
-          .toList();
+      return _mapItems(data);
     }
 
     throw Exception('Unexpected response');
@@ -74,12 +84,17 @@ class StockService {
     required int stock,
     required int price,
     String? imagePath,
+    String? type,
   }) async {
     final form = FormData.fromMap({
       'name': name,
       'stock': stock.toString(),
       'price': price.toString(),
     });
+
+    if (type != null && type.isNotEmpty) {
+      form.fields.add(MapEntry('type', type));
+    }
 
     if (imagePath != null && imagePath.isNotEmpty) {
       form.files.add(
@@ -94,6 +109,62 @@ class StockService {
       '/db/stock_page/new_item',
       data: form,
       options: Options(contentType: 'multipart/form-data'),
+    );
+
+    final body = response.data.toString();
+    if (body == 'err from sql') {
+      throw Exception('Server returned error');
+    }
+    return body;
+  }
+
+  Future<String> updateItem({
+    required int itemId,
+    required String name,
+    required int stock,
+    required int price,
+    String? imagePath,
+    String? type,
+  }) async {
+    final form = FormData.fromMap({
+      'item_id': itemId.toString(),
+      'name': name,
+      'stock': stock.toString(),
+      'price': price.toString(),
+    });
+
+    if (type != null && type.isNotEmpty) {
+      form.fields.add(MapEntry('type', type));
+    }
+
+    if (imagePath != null && imagePath.isNotEmpty) {
+      form.files.add(
+        MapEntry(
+          'icon',
+          await MultipartFile.fromFile(imagePath),
+        ),
+      );
+    }
+
+    final response = await _dio.post(
+      '/db/stock_page/update_item',
+      data: form,
+      options: Options(contentType: 'multipart/form-data'),
+    );
+
+    final body = response.data.toString();
+    if (body == 'err from sql') {
+      throw Exception('Server returned error');
+    }
+    return body;
+  }
+
+  Future<String> deleteItems(List<int> itemIds) async {
+    final response = await _dio.post(
+      '/db/stock_page/delete_item',
+      data: {
+        'item_id_array': jsonEncode(itemIds),
+      },
     );
 
     final body = response.data.toString();
