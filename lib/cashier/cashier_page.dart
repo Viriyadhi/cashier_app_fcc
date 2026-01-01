@@ -1,9 +1,13 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:cashier_app/api/auth_service.dart';
 import 'package:cashier_app/api/stock_service.dart';
 import 'package:cashier_app/api/transaction_service.dart';
+import 'package:cashier_app/login_page.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 class CashierPage extends StatefulWidget {
   const CashierPage({super.key});
@@ -15,6 +19,7 @@ class CashierPage extends StatefulWidget {
 class _CashierPageState extends State<CashierPage> {
   final TextEditingController _searchController = TextEditingController();
   bool _isLoading = false;
+  bool _isLoggingOut = false;
   String? _errorText;
   List<StockItem> _items = [];
   final Map<int, _CartEntry> _cart = {};
@@ -22,7 +27,26 @@ class _CashierPageState extends State<CashierPage> {
   int _selectedCategoryIndex = 0;
   bool _isSubmitting = false;
 
-  void onLogoutTap() {}
+  Future<void> onLogoutTap() async {
+    if (_isLoggingOut) return;
+    setState(() {
+      _isLoggingOut = true;
+    });
+
+    try {
+      await AuthService.instance.logout();
+    } catch (_) {
+      if (!mounted) return;
+      _showSnackBar('Logout failed. Please try again.');
+    }
+
+    if (!mounted) return;
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginPage()),
+      (_) => false,
+    );
+  }
 
   @override
   void initState() {
@@ -119,14 +143,30 @@ class _CashierPageState extends State<CashierPage> {
       if (item == null) {
         _cart.remove(id);
       } else {
-        _cart[id] = _CartEntry(item: item, qty: _cart[id]!.qty);
+        final available = item.currentStock < 0 ? 0 : item.currentStock;
+        if (available == 0) {
+          _cart.remove(id);
+          continue;
+        }
+        final currentQty = _cart[id]!.qty;
+        final nextQty = currentQty > available ? available : currentQty;
+        _cart[id] = _CartEntry(item: item, qty: nextQty);
       }
     }
   }
 
   void _addToCart(StockItem item) {
+    final available = item.currentStock < 0 ? 0 : item.currentStock;
+    if (available == 0) {
+      _showSnackBar('Out of stock.');
+      return;
+    }
+    final entry = _cart[item.id];
+    if (entry != null && entry.qty >= available) {
+      _showSnackBar('No more stock available.');
+      return;
+    }
     setState(() {
-      final entry = _cart[item.id];
       if (entry == null) {
         _cart[item.id] = _CartEntry(item: item, qty: 1);
       } else {
@@ -138,6 +178,12 @@ class _CashierPageState extends State<CashierPage> {
   void _incrementCartItem(int itemId) {
     final entry = _cart[itemId];
     if (entry == null) return;
+    final available =
+        entry.item.currentStock < 0 ? 0 : entry.item.currentStock;
+    if (entry.qty >= available) {
+      _showSnackBar('No more stock available.');
+      return;
+    }
     setState(() {
       _cart[itemId] = entry.copyWith(qty: entry.qty + 1);
     });
@@ -200,6 +246,9 @@ class _CashierPageState extends State<CashierPage> {
   Widget build(BuildContext context) {
     final catalogItems = _filteredItems;
     final checkoutItems = _cart.values.toList();
+    final cartQuantities = {
+      for (final entry in _cart.entries) entry.key: entry.value.qty,
+    };
     final total = _cart.values.fold<int>(
       0,
       (sum, entry) => sum + (entry.item.price * entry.qty),
@@ -232,6 +281,7 @@ class _CashierPageState extends State<CashierPage> {
                             categories: _categoryOptions,
                             selectedCategoryIndex: _selectedCategoryIndex,
                             onCategorySelected: _selectCategory,
+                            cartQuantities: cartQuantities,
                             onItemTap: _addToCart,
                           ),
                           const SizedBox(height: 16),
@@ -266,6 +316,7 @@ class _CashierPageState extends State<CashierPage> {
                             categories: _categoryOptions,
                             selectedCategoryIndex: _selectedCategoryIndex,
                             onCategorySelected: _selectCategory,
+                            cartQuantities: cartQuantities,
                             onItemTap: _addToCart,
                           ),
                         ),
@@ -317,12 +368,20 @@ class CashierTopBar extends StatelessWidget {
             child: Row(
               children: [
                 Row(
-                  children: const [
-                    Icon(Icons.storefront, color: Color(0xFF27DD8E), size: 26),
-                    SizedBox(width: 10),
+                  children: [
+                    SvgPicture.asset(
+                      'assets/Logo.svg',
+                      width: 26,
+                      height: 26,
+                      colorFilter: const ColorFilter.mode(
+                        Color(0xFFFFC107),
+                        BlendMode.srcIn,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
                     Text(
                       "ASEP'S POS",
-                      style: TextStyle(
+                      style: GoogleFonts.aclonica(
                         color: Colors.white,
                         fontSize: 20,
                         fontWeight: FontWeight.w700,
@@ -369,6 +428,7 @@ class CatalogPanel extends StatelessWidget {
     required this.categories,
     required this.selectedCategoryIndex,
     required this.onCategorySelected,
+    required this.cartQuantities,
     required this.onItemTap,
   });
 
@@ -381,6 +441,7 @@ class CatalogPanel extends StatelessWidget {
   final List<_CategoryOption> categories;
   final int selectedCategoryIndex;
   final ValueChanged<int> onCategorySelected;
+  final Map<int, int> cartQuantities;
   final ValueChanged<StockItem> onItemTap;
 
   @override
@@ -398,7 +459,15 @@ class CatalogPanel extends StatelessWidget {
       ),
       itemBuilder: (context, index) {
         final item = items[index];
-        return CatalogItemCard(item: item, onTap: () => onItemTap(item));
+        final inCart = cartQuantities[item.id] ?? 0;
+        final available = item.currentStock < 0 ? 0 : item.currentStock;
+        final remaining = available - inCart;
+        final displayStock = remaining < 0 ? 0 : remaining;
+        return CatalogItemCard(
+          item: item,
+          remainingStock: displayStock,
+          onTap: () => onItemTap(item),
+        );
       },
     );
 
@@ -643,9 +712,15 @@ Uint8List? _decodeBase64Image(String base64Image) {
 }
 
 class CatalogItemCard extends StatelessWidget {
-  const CatalogItemCard({super.key, required this.item, required this.onTap});
+  const CatalogItemCard({
+    super.key,
+    required this.item,
+    required this.remainingStock,
+    required this.onTap,
+  });
 
   final StockItem item;
+  final int remainingStock;
   final VoidCallback onTap;
 
   @override
@@ -708,6 +783,15 @@ class CatalogItemCard extends StatelessWidget {
                 style: const TextStyle(
                   color: Color(0xFF27DD8E),
                   fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                'Stock: $remainingStock',
+                style: const TextStyle(
+                  color: Color(0xFF8A9691),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
             ],
@@ -776,12 +860,16 @@ class CheckoutPanel extends StatelessWidget {
               (_, __) => const Divider(height: 16, color: borderColor),
           itemBuilder: (context, index) {
             final item = items[index];
+            final available =
+                item.item.currentStock < 0 ? 0 : item.item.currentStock;
+            final canIncrement = available > item.qty;
             return CheckoutItemRow(
               item: item,
               onIncrement: () => onIncrement(item.item.id),
               onDecrement: () => onDecrement(item.item.id),
               onRemove: () => onRemove(item.item.id),
               layout: layout,
+              canIncrement: canIncrement,
             );
           },
         );
@@ -904,6 +992,7 @@ class CheckoutItemRow extends StatelessWidget {
     required this.onDecrement,
     required this.onRemove,
     required this.layout,
+    required this.canIncrement,
   });
 
   final _CartEntry item;
@@ -911,6 +1000,7 @@ class CheckoutItemRow extends StatelessWidget {
   final VoidCallback onDecrement;
   final VoidCallback onRemove;
   final _CheckoutLayout layout;
+  final bool canIncrement;
 
   @override
   Widget build(BuildContext context) {
@@ -941,7 +1031,6 @@ class CheckoutItemRow extends StatelessWidget {
           ),
         ),
 
-        // ✅ FIX: scaleDown so QTY pill never overflows
         SizedBox(
           width: layout.qtyWidth,
           child: Center(
@@ -980,6 +1069,7 @@ class CheckoutItemRow extends StatelessWidget {
                       onTap: onIncrement,
                       size: layout.qtyIconSize,
                       iconSize: layout.qtyIconInnerSize,
+                      enabled: canIncrement,
                     ),
                   ],
                 ),
@@ -1016,27 +1106,31 @@ class _QtyIcon extends StatelessWidget {
     required this.onTap,
     required this.size,
     required this.iconSize,
+    this.enabled = true,
   });
 
   final IconData icon;
   final VoidCallback onTap;
   final double size;
   final double iconSize;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
     const accent = Color(0xFF27DD8E);
+    const disabled = Color(0xFFBFD8CB);
+    final color = enabled ? accent : disabled;
 
     return GestureDetector(
-      onTap: onTap,
+      onTap: enabled ? onTap : null,
       child: Container(
         width: size,
         height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: accent),
+          border: Border.all(color: color),
         ),
-        child: Icon(icon, size: iconSize, color: accent),
+        child: Icon(icon, size: iconSize, color: color),
       ),
     );
   }

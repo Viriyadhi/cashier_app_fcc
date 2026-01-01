@@ -128,19 +128,38 @@ class AdminNavBar extends StatelessWidget {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       _TopIcon(
-                        icon: Icons.receipt_long_outlined,
+                        iconBuilder:
+                            (color) => SvgPicture.asset(
+                              'assets/Stock.svg',
+                              width: 30,
+                              height: 30,
+                              colorFilter: ColorFilter.mode(
+                                color,
+                                BlendMode.srcIn,
+                              ),
+                            ),
                         isSelected: selectedIndex == 0,
                         onTap: () => onIconTap(0),
                       ),
                       const SizedBox(width: 24),
                       _TopIcon(
-                        icon: Icons.history,
+                        iconBuilder:
+                            (color) => Icon(
+                              Icons.history,
+                              color: color,
+                              size: 32,
+                            ),
                         isSelected: selectedIndex == 1,
                         onTap: () => onIconTap(1),
                       ),
                       const SizedBox(width: 24),
                       _TopIcon(
-                        icon: Icons.pie_chart_outline,
+                        iconBuilder:
+                            (color) => Icon(
+                              Icons.pie_chart_outline,
+                              color: color,
+                              size: 32,
+                            ),
                         isSelected: selectedIndex == 2,
                         onTap: () => onIconTap(2),
                       ),
@@ -177,12 +196,12 @@ class AdminNavBar extends StatelessWidget {
 
 class _TopIcon extends StatelessWidget {
   const _TopIcon({
-    required this.icon,
+    required this.iconBuilder,
     required this.isSelected,
     required this.onTap,
   });
 
-  final IconData icon;
+  final Widget Function(Color color) iconBuilder;
   final bool isSelected;
   final VoidCallback onTap;
 
@@ -195,7 +214,7 @@ class _TopIcon extends StatelessWidget {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, color: color, size: 32),
+          iconBuilder(color),
           const SizedBox(height: 6),
           AnimatedContainer(
             duration: const Duration(milliseconds: 150),
